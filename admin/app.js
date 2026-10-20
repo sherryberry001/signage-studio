@@ -17,6 +17,7 @@ let screenCommands = [];
 let currentRole = null;
 let statusTimer = null;
 let screensLoadId = 0;
+const selectedScreenIds = new Set();
 
 $('#year').textContent = new Date().getFullYear();
 
@@ -65,6 +66,7 @@ function setSession(user) {
     channelSchedules = [];
     teamMembers = [];
     screenCommands = [];
+    selectedScreenIds.clear();
     currentRole = null;
     screenList.replaceChildren();
     clearInterval(statusTimer);
@@ -214,6 +216,10 @@ async function loadScreens() {
     if (slideError) toast(slideError.message, true);
     return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(String(screen.name || '').trim().toLocaleLowerCase('sv-SE')) || 1, screenCommands.find(command => command.screen_id === screen.id));
   }));
+  selectedScreenIds.forEach(id => { if (!screens.some(screen => screen.id === id)) selectedScreenIds.delete(id); });
+  $('#selectVisibleScreens').classList.toggle('hidden', !['admin', 'editor'].includes(currentRole));
+  applyScreenFilters();
+  updateBulkScreenActions();
   updateScreenSummary();
   renderTeamMembers();
 }
@@ -265,6 +271,79 @@ function updateScreenSummary() {
   $('#screenCount').textContent = `${screens.length} ${screens.length === 1 ? 'skärm' : 'skärmar'} · ${online} online`;
 }
 
+$('#screenSearch').addEventListener('input', applyScreenFilters);
+$('#screenFilter').addEventListener('change', applyScreenFilters);
+$('#selectVisibleScreens').addEventListener('click', () => {
+  const visibleCards = [...screenList.querySelectorAll('.screen-card:not(.hidden)')];
+  const allSelected = visibleCards.length > 0 && visibleCards.every(card => selectedScreenIds.has(card.dataset.screenId));
+  visibleCards.forEach(card => {
+    if (allSelected) selectedScreenIds.delete(card.dataset.screenId);
+    else selectedScreenIds.add(card.dataset.screenId);
+    const checkbox = card.querySelector('.screen-select');
+    if (checkbox) checkbox.checked = selectedScreenIds.has(card.dataset.screenId);
+  });
+  $('#selectVisibleScreens').textContent = allSelected ? 'Välj synliga' : 'Avmarkera synliga';
+  updateBulkScreenActions();
+});
+$('#clearScreenSelection').addEventListener('click', () => {
+  selectedScreenIds.clear();
+  screenList.querySelectorAll('.screen-select').forEach(checkbox => { checkbox.checked = false; });
+  $('#selectVisibleScreens').textContent = 'Välj synliga';
+  updateBulkScreenActions();
+});
+document.querySelectorAll('[data-bulk-command]').forEach(button => button.addEventListener('click', () => queueBulkPlayerCommand(button.dataset.bulkCommand, button)));
+
+function applyScreenFilters() {
+  const query = $('#screenSearch').value.trim().toLocaleLowerCase('sv-SE');
+  const filter = $('#screenFilter').value;
+  const visible = [];
+  screenList.querySelectorAll('.screen-card').forEach(card => {
+    const screen = screens.find(item => item.id === card.dataset.screenId);
+    const matchesName = !query || `${screen?.name || ''} ${screen?.current_title || ''}`.toLocaleLowerCase('sv-SE').includes(query);
+    const matchesStatus = filter === 'all'
+      || (filter === 'online' && screen && isOnline(screen))
+      || (filter === 'offline' && screen && !isOnline(screen))
+      || (filter === 'pairing' && Boolean(screen?.pair_code));
+    const show = matchesName && matchesStatus;
+    card.classList.toggle('hidden', !show);
+    if (show) visible.push(card);
+  });
+  $('#visibleScreenCount').textContent = `${visible.length} visade`;
+  updateBulkScreenActions();
+}
+
+function updateBulkScreenActions() {
+  const canOperate = currentRole === 'admin' || currentRole === 'editor';
+  const actions = $('#bulkScreenActions');
+  if (!actions) return;
+  actions.classList.toggle('hidden', !canOperate || selectedScreenIds.size === 0);
+  $('#selectedScreenCount').textContent = `${selectedScreenIds.size} valda`;
+  const visibleCards = [...screenList.querySelectorAll('.screen-card:not(.hidden)')];
+  const allVisibleSelected = visibleCards.length > 0 && visibleCards.every(card => selectedScreenIds.has(card.dataset.screenId));
+  $('#selectVisibleScreens').textContent = allVisibleSelected ? 'Avmarkera synliga' : 'Välj synliga';
+}
+
+async function queueBulkPlayerCommand(command, button) {
+  const selected = screens.filter(screen => selectedScreenIds.has(screen.id));
+  const active = selected.filter(screen => screen.is_active);
+  if (!active.length) return toast('Markera minst en aktiv skärm.', true);
+  button.disabled = true;
+  let queued = 0;
+  const failures = [];
+  try {
+    for (const screen of active) {
+      const { error } = await supabase.rpc('queue_player_command', { input_screen_id: screen.id, input_command: command });
+      if (error) failures.push(screen.name);
+      else queued++;
+    }
+    const action = command === 'restart_player' ? 'omstart' : 'synk';
+    toast(`${action}: ${queued} köade${selected.length > active.length ? `, ${selected.length - active.length} pausade hoppades över` : ''}${failures.length ? `, ${failures.length} misslyckades` : ''}.`, failures.length > 0);
+    refreshScreenStatus();
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function refreshScreenStatus() {
   if (!currentUser) return;
   const [{ data, error }, { data: commandData, error: commandError }] = await Promise.all([
@@ -305,6 +384,7 @@ async function refreshScreenStatus() {
       button.textContent = button.dataset.id === screen.forced_slide_id ? 'Visas nu' : 'Visa nu';
     });
   }
+  applyScreenFilters();
 }
 
 function kindLabel(kind) {
@@ -373,7 +453,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   const channelOptions = [`<option value="">Välj kanal</option>`, ...channels.map(channel => `<option value="${esc(channel.id)}">${esc(channel.name)} · ${esc(playlists.find(p => p.id === channel.playlist_id)?.name || 'spellista')}</option>`)].join('');
   card.innerHTML = `
     <div class="screen-head">
-      <div class="screen-title-wrap"><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · möjlig dubblett (${sameNameCount} med samma namn)` : ''}</div></div></div>
+      <div class="screen-title-wrap"><input class="screen-select ${canEdit ? '' : 'hidden'}" type="checkbox" ${selectedScreenIds.has(screen.id) ? 'checked' : ''} aria-label="Välj ${esc(screen.name)}" /><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · möjlig dubblett (${sameNameCount} med samma namn)` : ''}</div></div></div>
       <div class="screen-actions">${pending}<button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
     </div>
     <div class="screen-status-row"><div class="screen-live-status ${isOnline(screen) ? 'online' : 'offline'}"><span class="status-indicator"></span><span class="status-label">${isOnline(screen) ? 'Online nu' : 'Offline'}</span><span class="last-seen">${screen.last_seen_at ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Spelaren har inte rapporterat ännu'}</span></div><div class="current-content ${isOnline(screen) ? '' : 'stale'}"><span class="current-content-label">VISAS JUST NU</span><strong class="current-title">${esc(isOnline(screen) ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt')}</strong><span class="current-kind">${esc(isOnline(screen) ? kindLabel(screen.current_kind) : 'Skärmen är offline')}</span><div class="current-preview"></div></div></div>
@@ -392,6 +472,11 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
         <div class="add-box"><h3>Webbsida eller live-dashboard</h3><form class="text-slide-form add-web"><input name="title" maxlength="80" placeholder="Namn på sidan" required /><input name="url" type="url" placeholder="https://…" required /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="60" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till sida</button></div>${scheduleFields()}</form></div>
       </div>
     </div>`;
+  card.querySelector('.screen-select').addEventListener('change', event => {
+    if (event.currentTarget.checked) selectedScreenIds.add(screen.id);
+    else selectedScreenIds.delete(screen.id);
+    updateBulkScreenActions();
+  });
   updateCurrentPreview(card.querySelector('.current-preview'), screen, isOnline(screen));
 
   card.querySelector('.toggle-screen').addEventListener('click', async () => {
