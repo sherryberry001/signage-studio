@@ -14,7 +14,7 @@ Spelaren hämtar spellistan och rapporterar sin status var 15:e sekund. Adminvyn
 
 ## Publicera adminvyn på GitHub Pages
 
-1. Skapa ett Supabase-projekt och kör `supabase/schema.sql` i SQL Editor. På en befintlig installation kan filen köras igen för att lägga till live-status, direktval av innehåll och webbsidor utan att ta bort befintliga skärmar eller spellistor.
+1. Skapa ett Supabase-projekt och kör `supabase/schema.sql` i SQL Editor. För en befintlig installation kör du i stället `supabase/migrations/20261020_live_screen_control.sql` för att lägga till live-status, direktval av innehåll och webbsidor utan att röra befintliga skärmar eller spellistor.
 2. I Supabase Auth: stäng av publik registrering och bjud in de admin-konton som ska få ändra innehåll. Lägg till GitHub Pages-adressen under **URL Configuration → Redirect URLs** när den är känd.
 3. `admin/config.js` är redan konfigurerad med projektets Project URL och anon/public key. Anon-nyckeln är avsedd att finnas i klientkod; **service-role/secret-nyckeln får aldrig läggas i appen, GitHub Pages eller Android-bygget**. Åtkomst ska begränsas med RLS-policys.
 4. Skapa ett GitHub-repo och lägg upp innehållet i den här mappen på branchen `main`. Ett publikt repo passar GitHub Pages kostnadsfria flöde; det innehåller bara källkod och den avsedda publika Supabase anon-nyckeln.
