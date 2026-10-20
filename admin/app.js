@@ -10,6 +10,8 @@ const notice = $('#setupNotice');
 let currentUser = null;
 let screens = [];
 let playlists = [];
+let channels = [];
+let channelSchedules = [];
 let teamMembers = [];
 let currentRole = null;
 let statusTimer = null;
@@ -58,6 +60,8 @@ function setSession(user) {
     screensLoadId++;
     screens = [];
     playlists = [];
+    channels = [];
+    channelSchedules = [];
     teamMembers = [];
     currentRole = null;
     screenList.replaceChildren();
@@ -123,6 +127,17 @@ $('#createPlaylistForm').addEventListener('submit', async event => {
   await loadScreens();
 });
 
+$('#createChannelForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const name = $('#channelName').value.trim();
+  const playlist_id = $('#channelPlaylist').value;
+  const { error } = await supabase.from('channels').insert({ name, playlist_id });
+  if (error) return toast(error.message, true);
+  event.currentTarget.reset();
+  toast('Kanalen skapades. Tilldela den till en skärm och välj ett schema.');
+  await loadScreens();
+});
+
 async function loadScreens() {
   if (!currentUser) return;
   const loadId = ++screensLoadId;
@@ -130,16 +145,22 @@ async function loadScreens() {
   const [
     { data, error },
     { data: playlistData, error: playlistError },
-    { data: memberData, error: memberError }
+    { data: memberData, error: memberError },
+    { data: channelData, error: channelError },
+    { data: channelScheduleData, error: channelScheduleError }
   ] = await Promise.all([
     supabase.from('screens').select('*').order('created_at', { ascending: false }),
     supabase.from('playlists').select('*').order('name', { ascending: true }),
-    supabase.from('team_members').select('user_id,email,role').order('email', { ascending: true })
+    supabase.from('team_members').select('user_id,email,role').order('email', { ascending: true }),
+    supabase.from('channels').select('*').order('name', { ascending: true }),
+    supabase.from('screen_channel_schedules').select('*').order('priority', { ascending: true })
   ]);
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
   if (playlistError) return toast(playlistError.message, true);
   if (memberError) return toast(memberError.message, true);
+  if (channelError) return toast(channelError.message, true);
+  if (channelScheduleError) return toast(channelScheduleError.message, true);
   teamMembers = memberData || [];
   currentRole = teamMembers.find(member => member.user_id === userId)?.role || null;
   updateRoleVisibility();
@@ -155,6 +176,7 @@ async function loadScreens() {
   notice.classList.add('hidden');
   const nextScreens = data || [];
   const nextPlaylists = playlistData || [];
+  const nextChannels = channelData || [];
   const slideResults = await Promise.all(nextScreens.map(screen =>
     supabase.from('slides').select('*')
       .eq(screen.playlist_id ? 'playlist_id' : 'screen_id', screen.playlist_id || screen.id)
@@ -163,11 +185,14 @@ async function loadScreens() {
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   screens = nextScreens;
   playlists = nextPlaylists;
+  channels = nextChannels;
+  channelSchedules = channelScheduleData || [];
+  updateChannelControls();
   $('#emptyState').classList.toggle('hidden', screens.length > 0);
   screenList.replaceChildren(...screens.map((screen, index) => {
     const { data: slides, error: slideError } = slideResults[index];
     if (slideError) toast(slideError.message, true);
-    return renderScreen(screen, slides || []);
+    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id));
   }));
   updateScreenSummary();
   renderTeamMembers();
@@ -178,7 +203,14 @@ function updateRoleVisibility() {
   const editor = admin || currentRole === 'editor';
   $('#createScreenForm').classList.toggle('hidden', !admin);
   $('#createPlaylistForm').classList.toggle('hidden', !editor);
+  $('#createChannelForm').classList.toggle('hidden', !editor);
+  $('.channel-library-bar').classList.toggle('hidden', !editor);
   $('#teamPanel').classList.toggle('hidden', !admin);
+}
+
+function updateChannelControls() {
+  const select = $('#channelPlaylist');
+  if (select) select.innerHTML = `<option value="">Välj spellista</option>${playlists.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('')}`;
 }
 
 function renderTeamMembers() {
@@ -292,7 +324,7 @@ function scheduleFields() {
   return `<div class="schedule-fields"><div class="weekday-picker" aria-label="Återkommande veckodagar">${days.map(([value, label]) => `<label><input type="checkbox" name="weekdays" value="${value}" /><span>${label}</span></label>`).join('')}</div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från datum och tid" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till datum och tid" /></div><div class="inline-fields"><input class="schedule-input" name="daily_from" type="time" aria-label="Visa dagligen från" /><input class="schedule-input" name="daily_until" type="time" aria-label="Visa dagligen till" /></div><span class="schedule-help">Valda dagar och klockslag återkommer varje vecka. Lämna tomt för alltid.</span></div>`;
 }
 
-function renderScreen(screen, slides) {
+function renderScreen(screen, slides, assignedChannels = []) {
   const canAdmin = currentRole === 'admin';
   const canEdit = canAdmin || currentRole === 'editor';
   const card = document.createElement('article');
@@ -302,6 +334,7 @@ function renderScreen(screen, slides) {
   const playlistOptions = [`<option value="">Skärmens egen spellista</option>`, ...playlists.map(playlist =>
     `<option value="${playlist.id}" ${playlist.id === screen.playlist_id ? 'selected' : ''}>${esc(playlist.name)}</option>`
   )].join('');
+  const channelOptions = [`<option value="">Välj kanal</option>`, ...channels.map(channel => `<option value="${esc(channel.id)}">${esc(channel.name)} · ${esc(playlists.find(p => p.id === channel.playlist_id)?.name || 'spellista')}</option>`)].join('');
   card.innerHTML = `
     <div class="screen-head">
       <div class="screen-title-wrap"><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${slides.length} objekt</div></div></div>
@@ -311,6 +344,7 @@ function renderScreen(screen, slides) {
     <div class="screen-body">
       <p class="pair-help">${screen.pair_code ? 'Öppna Signage Player på TV:n och skriv koden ovan. Koden kan bara användas en gång.' : 'TV:n är parkopplad. Nytt innehåll synkas automatiskt och sparas lokalt för offlinevisning.'}</p>
       <label class="playlist-assignment ${canAdmin ? '' : 'hidden'}">Spellista för den här skärmen<select class="screen-playlist">${playlistOptions}</select><span>En spellista kan delas av flera skärmar.</span></label>
+      <section class="channel-assignment ${canEdit ? '' : 'hidden'}"><div class="channel-heading"><div><strong>Kanalschema</strong><span>Aktiv kanal prioriteras framför skärmens grundspellista. Lägre prioritetstal vinner.</span></div></div><form class="channel-schedule-form"><select name="channel_id" required>${channelOptions}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Kanalprioritet" />${scheduleFields()}<button class="button ghost small" type="submit">＋ Schemalägg kanal</button></form><div class="channel-schedule-list">${assignedChannels.map(item => { const channel = channels.find(c => c.id === item.channel_id); return `<div class="channel-schedule-row"><div><strong>${esc(channel?.name || 'Okänd kanal')}</strong><span>Prioritet ${item.priority} · ${scheduleSummary(item)}</span></div><button class="button ghost small remove-channel-schedule" data-id="${esc(item.id)}">Ta bort</button></div>`; }).join('') || '<div class="slide-sub">Inga kanaler schemalagda för den här skärmen.</div>'}</div></section>
       <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id && canEdit ? '' : 'hidden'}">Återgå till spellistan</button></div>
       <div class="playlist">${slides.map((slide, index) => renderSlide(slide, index, slides.length, canEdit)).join('') || '<div class="slide-sub">Spellistan är tom. Lägg till ett objekt nedan.</div>'}</div>
       <div class="slide-add-grid ${canEdit ? '' : 'hidden'}">
@@ -333,6 +367,24 @@ function renderScreen(screen, slides) {
     toast(playlist_id ? 'Spellistan tilldelades skärmen.' : 'Skärmen använder sin egen spellista.');
     await loadScreens();
   });
+  card.querySelector('.channel-schedule-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const f = new FormData(form);
+    const values = scheduleValues(f);
+    if (!values) return;
+    if (assignedChannels.some(item => item.channel_id === f.get('channel_id'))) return toast('Den här kanalen är redan tilldelad. Ändra eller ta bort det befintliga schemat.', true);
+    const { error } = await supabase.from('screen_channel_schedules').insert({ screen_id: screen.id, channel_id: String(f.get('channel_id')), priority: Number(f.get('priority')) || 100, ...values });
+    if (error) return toast(error.message, true);
+    toast('Kanalschemat sparades. TV:n byter innehåll automatiskt.');
+    await loadScreens();
+  });
+  card.querySelectorAll('.remove-channel-schedule').forEach(button => button.addEventListener('click', async () => {
+    const { error } = await supabase.from('screen_channel_schedules').delete().eq('id', button.dataset.id);
+    if (error) return toast(error.message, true);
+    toast('Kanalen togs bort från skärmens schema.');
+    await loadScreens();
+  }));
   card.querySelector('.delete-screen').addEventListener('click', async () => {
     if (!confirm(`Ta bort skärmen “${screen.name}” och dess spellista?`)) return;
     const { error } = await supabase.from('screens').delete().eq('id', screen.id);
@@ -345,6 +397,13 @@ function renderScreen(screen, slides) {
   card.querySelectorAll('[data-slide-action]').forEach(button => button.addEventListener('click', () => slideAction(button, screen, slides)));
   card.querySelector('.return-playlist').addEventListener('click', async () => setForcedSlide(screen, null));
   return card;
+}
+
+function scheduleSummary(item) {
+  const days = item.weekdays?.length ? `dagar ${item.weekdays.join(', ')}` : 'alla dagar';
+  const daily = item.daily_start_time && item.daily_end_time ? `${item.daily_start_time.slice(0,5)}–${item.daily_end_time.slice(0,5)}` : 'hela dagen';
+  const range = item.active_from || item.active_until ? `${item.active_from ? new Date(item.active_from).toLocaleString('sv-SE') : 'nu'} – ${item.active_until ? new Date(item.active_until).toLocaleString('sv-SE') : 'utan slutdatum'}` : 'alltid';
+  return `${days}, ${daily} · ${range}`;
 }
 
 function renderSlide(slide, index, count, canEdit) {

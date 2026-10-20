@@ -158,7 +158,11 @@ class MainActivity : Activity() {
         scheduleTask = object : Runnable {
             override fun run() {
                 val current = currentSlide
-                if (current != null && !isScheduled(current)) showCurrentSlide()
+                val desired = eligibleSlides()
+                val currentId = current?.optString("id")
+                val currentChannel = current?.optString("channel_id")?.takeUnless { it.isBlank() || it == "null" }
+                val desiredChannel = desired.firstOrNull()?.optString("channel_id")?.takeUnless { it.isBlank() || it == "null" }
+                if (current == null || currentId.isNullOrBlank() || currentId !in desired.map { it.optString("id") } || currentChannel != desiredChannel) showCurrentSlide()
                 handler.postDelayed(this, 15_000)
             }
         }
@@ -222,9 +226,8 @@ class MainActivity : Activity() {
             showIdle()
             return
         }
-        val chosen = (0 until slides.length()).map { (index + it) % slides.length() }
-            .firstOrNull { candidate -> slides.optJSONObject(candidate)?.let(::isScheduled) == true }
-        if (chosen == null) {
+        val eligible = eligibleSlides()
+        if (eligible.isEmpty()) {
             currentSlide = null
             currentTitle = "Inget publicerat just nu"
             currentBody = ""
@@ -236,8 +239,11 @@ class MainActivity : Activity() {
             handler.postDelayed(advanceTask!!, 30_000)
             return
         }
-        index = chosen
-        val item = slides.optJSONObject(index) ?: return
+        val eligibleIds = eligible.map { it.optString("id") }.toSet()
+        val item = (0 until slides.length()).map { (index + it) % slides.length() }
+            .mapNotNull { slides.optJSONObject(it) }
+            .firstOrNull { it.optString("id") in eligibleIds } ?: eligible[0]
+        index = (0 until slides.length()).firstOrNull { slides.optJSONObject(it)?.optString("id") == item.optString("id") } ?: 0
         currentSlide = item
         currentTitle = item.optString("title").ifBlank { "Väntar på innehåll" }
         currentBody = item.optString("body")
@@ -310,16 +316,20 @@ class MainActivity : Activity() {
     }
 
     private fun isScheduled(item: JSONObject): Boolean {
+        return isScheduled(item, "active_from", "active_until", "weekdays", "daily_start_time", "daily_end_time")
+    }
+
+    private fun isScheduled(item: JSONObject, fromKey: String, untilKey: String, weekdaysKey: String, startKey: String, endKey: String): Boolean {
         val now = Instant.now()
-        val from = item.optString("active_from").takeIf { it.isNotBlank() && it != "null" }?.let { runCatching { Instant.parse(it) }.getOrNull() }
-        val until = item.optString("active_until").takeIf { it.isNotBlank() && it != "null" }?.let { runCatching { Instant.parse(it) }.getOrNull() }
+        val from = item.optString(fromKey).takeIf { it.isNotBlank() && it != "null" }?.let { runCatching { Instant.parse(it) }.getOrNull() }
+        val until = item.optString(untilKey).takeIf { it.isNotBlank() && it != "null" }?.let { runCatching { Instant.parse(it) }.getOrNull() }
         if ((from != null && now.isBefore(from)) || (until != null && !now.isBefore(until))) return false
 
         val localNow = java.time.ZonedDateTime.now()
-        val weekdays = item.optJSONArray("weekdays")
+        val weekdays = item.optJSONArray(weekdaysKey)
         val selectedDays = weekdays?.let { array -> (0 until array.length()).map { array.optInt(it) }.toSet() }
-        val startText = item.optString("daily_start_time").takeIf { it.isNotBlank() && it != "null" }
-        val endText = item.optString("daily_end_time").takeIf { it.isNotBlank() && it != "null" }
+        val startText = item.optString(startKey).takeIf { it.isNotBlank() && it != "null" }
+        val endText = item.optString(endKey).takeIf { it.isNotBlank() && it != "null" }
         if (startText == null || endText == null) {
             return selectedDays.isNullOrEmpty() || localNow.dayOfWeek.value in selectedDays
         }
@@ -337,6 +347,29 @@ class MainActivity : Activity() {
             return selectedDays.isNullOrEmpty() || previousDay in selectedDays
         }
         return false
+    }
+
+    /** Select an active channel locally so the same schedule remains usable offline. */
+    private fun eligibleSlides(): List<JSONObject> {
+        val all = (0 until slides.length()).mapNotNull { slides.optJSONObject(it) }
+        val forced = all.firstOrNull { it.optBoolean("forced") }
+        if (forced != null) return listOf(forced)
+
+        val activeChannel = all.asSequence()
+            .filter { it.optString("channel_id").isNotBlank() && it.optString("channel_id") != "null" }
+            .filter { item -> isScheduled(item, "channel_active_from", "channel_active_until", "channel_weekdays", "channel_daily_start_time", "channel_daily_end_time") }
+            .sortedBy { it.optInt("channel_priority", 100) }
+            .firstOrNull()?.optString("channel_id")
+
+        val selected = if (activeChannel != null) {
+            all.filter { it.optString("channel_id") == activeChannel && isScheduled(it) }
+        } else {
+            all.filter { (it.isNull("channel_id") || it.optString("channel_id") == "null") && isScheduled(it) }
+        }
+        if (selected.isEmpty() && activeChannel != null) {
+            return all.filter { (it.isNull("channel_id") || it.optString("channel_id") == "null") && isScheduled(it) }
+        }
+        return selected
     }
 
     private fun showText(title: String, body: String) {

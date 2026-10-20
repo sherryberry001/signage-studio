@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261020-team-control" />
-    <script type="module" src="./app.js?v=20261020-team-control"></script>
+    <link rel="stylesheet" href="./style.css?v=20261020-channels" />
+    <script type="module" src="./app.js?v=20261020-channels"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -51,6 +51,10 @@
         <div class="playlist-library-bar">
           <div><strong>Återanvändbara spellistor</strong><span>Skapa en gång och tilldela till flera skärmar.</span></div>
           <form id="createPlaylistForm"><input id="playlistName" maxlength="80" placeholder="Namn på ny spellista" required /><button class="button ghost" type="submit">＋ Skapa spellista</button></form>
+        </div>
+        <div class="playlist-library-bar channel-library-bar">
+          <div><strong>Kanaler & scheman</strong><span>En kanal är en spellista som kan visas enligt ett eget schema på valda skärmar.</span></div>
+          <form id="createChannelForm"><input id="channelName" maxlength="80" placeholder="Namn på kanal" required /><select id="channelPlaylist" required aria-label="Spellista för kanal"><option value="">Välj spellista</option></select><button class="button ghost" type="submit">＋ Skapa kanal</button></form>
         </div>
         <section id="teamPanel" class="team-panel hidden">
           <div class="team-heading"><div><strong>Teamåtkomst</strong><span>Bjud först in personen i Supabase Auth och tilldela sedan en roll här.</span></div></div>
