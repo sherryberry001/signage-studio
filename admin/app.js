@@ -10,6 +10,7 @@ const notice = $('#setupNotice');
 let currentUser = null;
 let screens = [];
 let statusTimer = null;
+let screensLoadId = 0;
 
 $('#year').textContent = new Date().getFullYear();
 
@@ -41,15 +42,19 @@ function shortCode() {
 }
 
 function setSession(user) {
+  const sameUser = Boolean(user && currentUser?.id === user.id);
   currentUser = user;
   authView.classList.toggle('hidden', Boolean(user));
   appView.classList.toggle('hidden', !user);
   if (user) {
     $('#userEmail').textContent = user.email || 'Admin';
-    loadScreens();
+    if (!sameUser) loadScreens();
     clearInterval(statusTimer);
     statusTimer = setInterval(refreshScreenStatus, 5000);
   } else {
+    screensLoadId++;
+    screens = [];
+    screenList.replaceChildren();
     clearInterval(statusTimer);
   }
 }
@@ -93,17 +98,23 @@ $('#createScreenForm').addEventListener('submit', async event => {
 
 async function loadScreens() {
   if (!currentUser) return;
+  const loadId = ++screensLoadId;
+  const userId = currentUser.id;
   const { data, error } = await supabase.from('screens').select('*').order('created_at', { ascending: false });
+  if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
-  screens = data || [];
-  $('#screenCount').textContent = `${screens.length} ${screens.length === 1 ? 'skärm' : 'skärmar'}`;
+  const nextScreens = data || [];
+  const slideResults = await Promise.all(nextScreens.map(screen =>
+    supabase.from('slides').select('*').eq('screen_id', screen.id).order('sort_order', { ascending: true })
+  ));
+  if (loadId !== screensLoadId || currentUser?.id !== userId) return;
+  screens = nextScreens;
   $('#emptyState').classList.toggle('hidden', screens.length > 0);
-  screenList.innerHTML = '';
-  for (const screen of screens) {
-    const { data: slides, error: slideError } = await supabase.from('slides').select('*').eq('screen_id', screen.id).order('sort_order', { ascending: true });
+  screenList.replaceChildren(...screens.map((screen, index) => {
+    const { data: slides, error: slideError } = slideResults[index];
     if (slideError) toast(slideError.message, true);
-    screenList.append(renderScreen(screen, slides || []));
-  }
+    return renderScreen(screen, slides || []);
+  }));
   updateScreenSummary();
 }
 
