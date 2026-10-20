@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261027-workspaces" />
-    <script type="module" src="./app.js?v=20261027-workspaces"></script>
+    <link rel="stylesheet" href="./style.css?v=20261021-playlist-library" />
+    <script type="module" src="./app.js?v=20261021-playlist-library"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -60,6 +60,7 @@
           <div><strong>Återanvändbara spellistor</strong><span>Skapa en gång och tilldela till flera skärmar.</span></div>
           <form id="createPlaylistForm"><input id="playlistName" maxlength="80" placeholder="Namn på ny spellista" required /><button class="button ghost" type="submit">＋ Skapa spellista</button></form>
         </div>
+        <div id="playlistManagementList" class="playlist-management-list" data-workspace-panel="content"></div>
         <div class="playlist-library-bar channel-library-bar" data-workspace-panel="channels">
           <div><strong>Kanaler & scheman</strong><span>Bygg en kanal av flera spellistor med egna tider och lägg den på de skärmar som ska använda den.</span></div>
           <form id="createChannelForm"><input id="channelName" maxlength="80" placeholder="Namn på kanal" required /><select id="channelPlaylist" required aria-label="Spellista för kanal"><option value="">Välj spellista</option></select><button class="button ghost" type="submit">＋ Skapa kanal</button></form>

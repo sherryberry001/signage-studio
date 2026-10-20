@@ -10,6 +10,7 @@ const notice = $('#setupNotice');
 let currentUser = null;
 let screens = [];
 let playlists = [];
+let playlistSlides = [];
 let channels = [];
 let channelPlaylists = [];
 let channelSchedules = [];
@@ -95,6 +96,7 @@ function setSession(user) {
     screensLoadId++;
     screens = [];
     playlists = [];
+    playlistSlides = [];
     channels = [];
     channelPlaylists = [];
     channelSchedules = [];
@@ -302,6 +304,11 @@ async function loadScreens() {
   notice.classList.add('hidden');
   const nextScreens = data || [];
   const nextPlaylists = playlistData || [];
+  const playlistIds = nextPlaylists.map(item => item.id);
+  const { data: playlistSlideData, error: playlistSlideError } = playlistIds.length
+    ? await supabase.from('slides').select('*').in('playlist_id', playlistIds).order('sort_order', { ascending: true })
+    : { data: [], error: null };
+  if (playlistSlideError) return toast(playlistSlideError.message, true);
   const nextChannels = channelData || [];
   const assignedChannelIds = new Set((channelScheduleData || []).map(item => item.channel_id));
   const assignedChannelPlaylistIds = [...new Set((channelPlaylistData || []).filter(item => assignedChannelIds.has(item.channel_id)).map(item => item.playlist_id))];
@@ -317,6 +324,7 @@ async function loadScreens() {
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   screens = nextScreens;
   playlists = nextPlaylists;
+  playlistSlides = playlistSlideData || [];
   channels = nextChannels;
   channelPlaylists = channelPlaylistData || [];
   channelSchedules = channelScheduleData || [];
@@ -324,6 +332,7 @@ async function loadScreens() {
   mediaLibrary = mediaData || [];
   updateChannelControls();
   updateChannelManagement();
+  renderPlaylistLibrary();
   renderMediaLibrary();
   $('#emptyState').classList.toggle('hidden', screens.length > 0);
   const duplicateNames = new Map();
@@ -408,6 +417,70 @@ function updateChannelManagement() {
   }));
   if (!channels.length) container.innerHTML = '<div class="slide-sub">Skapa en kanal och välj dess första spellista ovan.</div>';
 }
+
+function renderPlaylistLibrary() {
+  const container = $('#playlistManagementList');
+  if (!container) return;
+  const canEdit = ['admin', 'editor'].includes(currentRole);
+  container.replaceChildren(...playlists.map(playlist => {
+    const items = playlistSlides.filter(item => item.playlist_id === playlist.id);
+    const screenCount = screens.filter(screen => screen.playlist_id === playlist.id).length;
+    const channelCount = channelPlaylists.filter(item => item.playlist_id === playlist.id).length;
+    const card = document.createElement('article');
+    card.className = 'playlist-manage-card';
+    card.innerHTML = `<div class="playlist-manage-heading"><div><span class="section-kicker">SPELLISTA · ${items.length} OBJEKT</span><form class="playlist-name-form" data-playlist-name="${esc(playlist.id)}"><input name="name" maxlength="80" value="${esc(playlist.name)}" aria-label="Spellistans namn" ${canEdit ? '' : 'disabled'} /><button class="button ghost small" type="submit" ${canEdit ? '' : 'disabled'}>Spara namn</button></form><span>${screenCount} skärmar · ${channelCount} kanaler använder listan</span></div><button class="button ghost small playlist-delete" type="button" data-playlist-delete="${esc(playlist.id)}" ${!canEdit || screenCount > 0 || channelCount > 0 ? 'disabled' : ''} title="${screenCount || channelCount ? 'Ta först bort listan från skärmar och kanaler.' : 'Ta bort tomma eller oanvända spellistor.'}">Ta bort</button></div><div class="playlist-manage-items">${items.map((item, index) => `<div class="playlist-manage-item"><div class="slide-thumb">${item.kind === 'video' ? '▶' : item.kind === 'feed' || item.kind === 'web' ? '↗' : item.kind === 'clock' ? '◷' : 'T'}</div><div class="playlist-manage-copy"><strong>${esc(item.title || kindLabel(item.kind))}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s</span></div><div class="playlist-manage-actions"><button class="icon-button" type="button" data-playlist-item-action="up" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === 0 ? 'disabled' : ''} aria-label="Flytta upp">↑</button><button class="icon-button" type="button" data-playlist-item-action="down" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === items.length - 1 ? 'disabled' : ''} aria-label="Flytta ned">↓</button><button class="icon-button delete" type="button" data-playlist-item-action="delete" data-playlist-item-id="${esc(item.id)}" ${!canEdit ? 'disabled' : ''} aria-label="Ta bort från spellistan">×</button></div></div>`).join('') || '<div class="playlist-manage-empty">Spellistan är tom. Lägg till publicerat material från biblioteket nedan.</div>'}</div>`;
+    return card;
+  }));
+  if (!playlists.length) container.innerHTML = '<div class="playlist-manage-empty">Skapa en spellista för att samla innehåll och återanvända den på flera skärmar eller i kanaler.</div>';
+}
+
+$('#playlistManagementList').addEventListener('submit', async event => {
+  const form = event.target.closest('[data-playlist-name]');
+  if (!form) return;
+  event.preventDefault();
+  const name = String(new FormData(form).get('name') || '').trim();
+  if (!name) return toast('Ange ett namn på spellistan.', true);
+  const { error } = await supabase.from('playlists').update({ name, updated_at: new Date().toISOString() }).eq('id', form.dataset.playlistName);
+  if (error) return toast(error.message, true);
+  toast('Spellistans namn uppdaterades.');
+  await loadScreens();
+});
+
+$('#playlistManagementList').addEventListener('click', async event => {
+  const deletePlaylist = event.target.closest('[data-playlist-delete]');
+  if (deletePlaylist && !deletePlaylist.disabled) {
+    const playlist = playlists.find(item => item.id === deletePlaylist.dataset.playlistDelete);
+    if (!playlist || !confirm(`Ta bort den oanvända spellistan ”${playlist.name}”?`)) return;
+    const { error } = await supabase.from('playlists').delete().eq('id', playlist.id);
+    if (error) return toast(error.message, true);
+    toast('Spellistan togs bort.');
+    await loadScreens();
+    return;
+  }
+  const button = event.target.closest('[data-playlist-item-action]');
+  if (!button || button.disabled) return;
+  const itemId = button.dataset.playlistItemId;
+  const action = button.dataset.playlistItemAction;
+  const item = playlistSlides.find(slide => slide.id === itemId);
+  if (!item) return;
+  if (action === 'delete') {
+    if (!confirm(`Ta bort ”${item.title || kindLabel(item.kind)}” från spellistan? Innehållsposten i biblioteket behålls.`)) return;
+    const { error } = await supabase.from('slides').delete().eq('id', item.id);
+    if (error) return toast(error.message, true);
+    toast('Objektet togs bort från spellistan.');
+    await loadScreens();
+    return;
+  }
+  const siblings = playlistSlides.filter(slide => slide.playlist_id === item.playlist_id);
+  const index = siblings.findIndex(slide => slide.id === item.id);
+  const other = siblings[index + (action === 'up' ? -1 : 1)];
+  if (!other) return;
+  const first = await supabase.from('slides').update({ sort_order: other.sort_order }).eq('id', item.id);
+  if (first.error) return toast(first.error.message, true);
+  const second = await supabase.from('slides').update({ sort_order: item.sort_order }).eq('id', other.id);
+  if (second.error) return toast(second.error.message, true);
+  await loadScreens();
+});
 
 function renderMediaLibrary() {
   const list = $('#mediaLibraryList');
