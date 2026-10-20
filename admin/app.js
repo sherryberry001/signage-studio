@@ -582,7 +582,7 @@ async function refreshScreenStatus() {
 }
 
 function kindLabel(kind) {
-  return ({ text: 'Textmeddelande', video: 'Video', clock: 'Klocka & datum', feed: 'JSON-feed', web: 'Webbsida / live dashboard' })[kind] || kind || '—';
+  return ({ text: 'Textmeddelande', video: 'Video', clock: 'Klocka & datum', feed: 'JSON-feed', web: 'Webbsida / live dashboard', sleep: 'Utanför öppettider' })[kind] || kind || '—';
 }
 
 function formatCommandStatus(command) {
@@ -644,6 +644,8 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   const playlistOptions = [`<option value="">Skärmens egen spellista</option>`, ...playlists.map(playlist =>
     `<option value="${playlist.id}" ${playlist.id === screen.playlist_id ? 'selected' : ''}>${esc(playlist.name)}</option>`
   )].join('');
+  const operatingDays = [[1, 'Mån'], [2, 'Tis'], [3, 'Ons'], [4, 'Tor'], [5, 'Fre'], [6, 'Lör'], [7, 'Sön']];
+  const selectedOperatingDays = screen.operating_weekdays == null ? operatingDays.map(([day]) => day) : screen.operating_weekdays.map(Number);
   const channelOptions = [`<option value="">Välj kanal</option>`, ...channels.map(channel => `<option value="${esc(channel.id)}">${esc(channel.name)} · ${channelPlaylists.filter(item => item.channel_id === channel.id).length} spellistor</option>`)].join('');
   card.innerHTML = `
     <div class="screen-head">
@@ -653,6 +655,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     <div class="screen-status-row"><div class="screen-live-status ${isOnline(screen) ? 'online' : 'offline'}"><span class="status-indicator"></span><span class="status-label">${isOnline(screen) ? 'Online nu' : 'Offline'}</span><span class="last-seen">${screen.last_seen_at ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Spelaren har inte rapporterat ännu'}</span></div><div class="current-content ${isOnline(screen) ? '' : 'stale'}"><span class="current-content-label">VISAS JUST NU</span><strong class="current-title">${esc(isOnline(screen) ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt')}</strong><span class="current-kind">${esc(isOnline(screen) ? kindLabel(screen.current_kind) : 'Skärmen är offline')}</span><div class="current-preview"></div></div></div>
     <div class="screen-body">
       <p class="pair-help">${screen.pair_code ? 'Öppna Signage Player på TV:n och skriv koden ovan. Koden kan bara användas en gång.' : 'TV:n är parkopplad. Nytt innehåll synkas automatiskt och sparas lokalt för offlinevisning.'}</p>
+      <form class="screen-operating-form ${canAdmin ? '' : 'hidden'}"><div class="operating-heading"><strong>Öppettider</strong><span>TV:n visar svart utanför tiderna men fortsätter vara ansluten. Tider följer TV:ns lokala klocka.</span></div><div class="operating-days">${operatingDays.map(([day, label]) => `<label><input type="checkbox" name="operating_weekdays" value="${day}" ${selectedOperatingDays.includes(day) ? 'checked' : ''} /><span>${label}</span></label>`).join('')}</div><div class="operating-times"><label>Från<input name="operating_start_time" type="time" value="${esc(screen.operating_start_time || '')}" /></label><label>Till<input name="operating_end_time" type="time" value="${esc(screen.operating_end_time || '')}" /></label></div><button class="button ghost small" type="submit">Spara öppettider</button></form>
       <label class="playlist-assignment ${canAdmin ? '' : 'hidden'}">Spellista för den här skärmen<select class="screen-playlist">${playlistOptions}</select><span>En spellista kan delas av flera skärmar.</span></label>
       <form class="screen-layout-form ${canAdmin ? '' : 'hidden'}"><label>Skärmlayout<select name="layout_type"><option value="single" ${screen.layout_type === 'single' ? 'selected' : ''}>En zon · fullskärm</option><option value="bottom_ticker" ${screen.layout_type === 'bottom_ticker' ? 'selected' : ''}>Huvudyta + ticker längst ned</option><option value="side_panel" ${screen.layout_type === 'side_panel' ? 'selected' : ''}>Huvudyta + sidopanel</option></select></label><label>Spellista i zon 2<select name="zone_playlist_id"><option value="">Visa zontext</option>${playlists.map(playlist => `<option value="${esc(playlist.id)}" ${playlist.id === screen.zone_playlist_id ? 'selected' : ''}>${esc(playlist.name)}</option>`).join('')}</select></label><label class="layout-text-label">Zontext<input name="layout_text" maxlength="500" value="${esc(screen.layout_text || '')}" placeholder="Visas om zonspellistan saknar aktivt innehåll" /></label><button class="button ghost small" type="submit">Spara layout</button></form>
       <section class="channel-assignment ${canEdit ? '' : 'hidden'}"><div class="channel-heading"><div><strong>Kanalschema</strong><span>Aktiv kanal prioriteras framför skärmens grundspellista. Lägre prioritetstal vinner.</span></div></div><form class="channel-schedule-form"><select name="channel_id" required>${channelOptions}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Kanalprioritet" />${scheduleFields()}<button class="button ghost small" type="submit">＋ Schemalägg kanal</button></form><div class="channel-schedule-list">${assignedChannels.map(item => { const channel = channels.find(c => c.id === item.channel_id); return `<div class="channel-schedule-row"><div><strong>${esc(channel?.name || 'Okänd kanal')}</strong><span>Prioritet ${item.priority} · ${scheduleSummary(item)}</span></div><button class="button ghost small remove-channel-schedule" data-id="${esc(item.id)}">Ta bort</button></div>`; }).join('') || '<div class="slide-sub">Inga kanaler schemalagda för den här skärmen.</div>'}</div></section>
@@ -683,6 +686,25 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     const { data: code, error } = await supabase.rpc('renew_screen_pairing_code', { input_screen_id: screen.id });
     if (error) return toast(error.message, true);
     toast(`Ny parkopplingskod för ${screen.name}: ${code}`);
+    await loadScreens();
+  });
+  card.querySelector('.screen-operating-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const start = String(values.get('operating_start_time') || '') || null;
+    const end = String(values.get('operating_end_time') || '') || null;
+    if (Boolean(start) !== Boolean(end)) return toast('Ange både start- och sluttid, eller lämna båda tomma.', true);
+    if (start && start === end) return toast('Start- och sluttid kan inte vara samma.', true);
+    const days = values.getAll('operating_weekdays').map(Number).filter(day => day >= 1 && day <= 7);
+    const operating_weekdays = days.length === 7 || days.length === 0 ? null : days;
+    const { error } = await supabase.from('screens').update({
+      operating_weekdays,
+      operating_start_time: start,
+      operating_end_time: end
+    }).eq('id', screen.id);
+    if (error) return toast(error.message, true);
+    toast('Skärmens öppettider sparades.');
     await loadScreens();
   });
   card.querySelector('.screen-playlist').addEventListener('change', async event => {

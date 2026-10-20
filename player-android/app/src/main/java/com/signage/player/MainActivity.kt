@@ -41,6 +41,8 @@ class MainActivity : Activity() {
     private val prefs by lazy { getSharedPreferences("signage-player", MODE_PRIVATE) }
     private lateinit var root: FrameLayout
     private var screenId: String? = null
+    private var screenConfig = JSONObject()
+    private var outsideOperatingHours = false
     private var slides = JSONArray()
     private var zoneSlides = JSONArray()
     private var index = 0
@@ -74,6 +76,8 @@ class MainActivity : Activity() {
         root = FrameLayout(this).apply { setBackgroundColor(Color.rgb(12, 15, 22)) }
         setContentView(root)
         screenId = prefs.getString("screen_id", null)
+        screenConfig = runCatching { JSONObject(prefs.getString("screen_config", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        outsideOperatingHours = !isWithinOperatingHours(screenConfig)
         if (screenId.isNullOrBlank()) showPairing() else startPlayer()
     }
 
@@ -145,7 +149,8 @@ class MainActivity : Activity() {
 
     private fun startPlayer() {
         enterImmersive()
-        showMessage("Ansluter till Signage Studio …", "Senast publicerade innehåll visas när det går att synka.")
+        if (outsideOperatingHours) showOperatingHoursScreen()
+        else showMessage("Ansluter till Signage Studio …", "Senast publicerade innehåll visas när det går att synka.")
         syncPlaylist()
         refreshTask?.let(handler::removeCallbacks)
         refreshTask = object : Runnable {
@@ -167,6 +172,15 @@ class MainActivity : Activity() {
         scheduleTask?.let(handler::removeCallbacks)
         scheduleTask = object : Runnable {
             override fun run() {
+                val isClosed = !isWithinOperatingHours(screenConfig)
+                if (isClosed != outsideOperatingHours) {
+                    outsideOperatingHours = isClosed
+                    if (isClosed) showOperatingHoursScreen() else showCurrentSlide()
+                }
+                if (outsideOperatingHours) {
+                    handler.postDelayed(this, 15_000)
+                    return
+                }
                 val current = currentSlide
                 val desired = eligibleSlides()
                 val currentId = current?.optString("id")
@@ -186,6 +200,9 @@ class MainActivity : Activity() {
         }
         worker.execute {
             try {
+                val freshConfig = runCatching {
+                    JSONObject(apiRequest("${baseUrl()}/rest/v1/rpc/player_screen_config", "POST", JSONObject().put("input_screen_id", id).toString()))
+                }.getOrNull()
                 val result = apiRequest("${baseUrl()}/rest/v1/rpc/player_playlist", "POST", JSONObject().put("input_screen_id", id).toString())
                 val fresh = JSONArray(result)
                 val previous = prefs.getString("playlist", "[]") ?: "[]"
@@ -194,9 +211,18 @@ class MainActivity : Activity() {
                 setPlayerPlaylist(fresh)
                 lastSync = "Synkad ${DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.now())}"
                 preloadVideos(fresh)
-                if (changed || fresh.length() == 0) handler.post {
-                    if (changed) index = 0
-                    showCurrentSlide()
+                if (freshConfig != null) prefs.edit().putString("screen_config", freshConfig.toString()).apply()
+                val effectiveConfig = freshConfig ?: screenConfig
+                handler.post {
+                    val wasClosed = outsideOperatingHours
+                    screenConfig = effectiveConfig
+                    outsideOperatingHours = !isWithinOperatingHours(screenConfig)
+                    if (outsideOperatingHours) {
+                        if (!wasClosed || changed) showOperatingHoursScreen()
+                    } else if (changed || wasClosed || fresh.length() == 0) {
+                        if (changed) index = 0
+                        showCurrentSlide()
+                    }
                 }
                 onComplete?.invoke(null)
             } catch (_: Exception) {
@@ -204,7 +230,12 @@ class MainActivity : Activity() {
                 setPlayerPlaylist(try { JSONArray(saved) } catch (_: Exception) { JSONArray() })
                 val savedTime = prefs.getString("last_sync", null)
                 lastSync = savedTime?.let { "Offline · senast synkad ${formatTime(it)}" } ?: "Offline · inget innehåll sparat"
-                handler.post { if (slides.length() > 0 || zoneSlides.length() > 0) showCurrentSlide() else showMessage("Ingen anslutning", "När TV:n får nät igen synkas innehållet automatiskt.") }
+                handler.post {
+                    outsideOperatingHours = !isWithinOperatingHours(screenConfig)
+                    if (outsideOperatingHours) showOperatingHoursScreen()
+                    else if (slides.length() > 0 || zoneSlides.length() > 0) showCurrentSlide()
+                    else showMessage("Ingen anslutning", "När TV:n får nät igen synkas innehållet automatiskt.")
+                }
                 onComplete?.invoke("Kunde inte synka innehållet.")
             }
         }
@@ -274,6 +305,10 @@ class MainActivity : Activity() {
     }
 
     private fun showCurrentSlide() {
+        if (outsideOperatingHours) {
+            showOperatingHoursScreen()
+            return
+        }
         slideGeneration++
         advanceTask?.let(handler::removeCallbacks)
         clockTask?.let(handler::removeCallbacks)
@@ -548,6 +583,31 @@ class MainActivity : Activity() {
 
     private fun isScheduled(item: JSONObject): Boolean {
         return isScheduled(item, "active_from", "active_until", "weekdays", "daily_start_time", "daily_end_time")
+    }
+
+    private fun isWithinOperatingHours(config: JSONObject): Boolean {
+        val localNow = java.time.ZonedDateTime.now()
+        val selected = config.optJSONArray("operating_weekdays")
+        val days = selected?.let { array ->
+            (0 until array.length()).mapNotNull { array.optInt(it).takeIf { day -> day in 1..7 } }.toSet()
+        }.orEmpty()
+        val unrestrictedDays = selected == null || days.isEmpty()
+        fun isSelected(day: Int) = unrestrictedDays || day in days
+
+        val startText = config.optString("operating_start_time").takeIf { it.isNotBlank() && it != "null" }
+        val endText = config.optString("operating_end_time").takeIf { it.isNotBlank() && it != "null" }
+        if (startText == null && endText == null) return isSelected(localNow.dayOfWeek.value)
+        val start = runCatching { LocalTime.parse(startText) }.getOrNull() ?: return true
+        val end = runCatching { LocalTime.parse(endText) }.getOrNull() ?: return true
+        val now = localNow.toLocalTime()
+        if (start == end) return isSelected(localNow.dayOfWeek.value)
+        if (start < end) return isSelected(localNow.dayOfWeek.value) && !now.isBefore(start) && now.isBefore(end)
+        if (!now.isBefore(start)) return isSelected(localNow.dayOfWeek.value)
+        if (now.isBefore(end)) {
+            val previousDay = if (localNow.dayOfWeek.value == 1) 7 else localNow.dayOfWeek.value - 1
+            return isSelected(previousDay)
+        }
+        return false
     }
 
     private fun isScheduled(item: JSONObject, fromKey: String, untilKey: String, weekdaysKey: String, startKey: String, endKey: String): Boolean {
@@ -879,6 +939,25 @@ class MainActivity : Activity() {
         page.addView(label(title, 38, Color.WHITE, true))
         page.addView(label(body, 19, Color.LTGRAY, false).apply { setPadding(0, 14, 0, 0) })
         root.addView(page, FrameLayout.LayoutParams(-1, -1))
+    }
+
+    private fun showOperatingHoursScreen() {
+        advanceTask?.let(handler::removeCallbacks)
+        clockTask?.let(handler::removeCallbacks)
+        playerVideo?.stopPlayback()
+        dashboardView?.stopLoading()
+        dashboardView?.destroy()
+        clearSecondaryZone()
+        playerVideo = null
+        dashboardView = null
+        root.removeAllViews()
+        root.setBackgroundColor(Color.BLACK)
+        currentSlide = null
+        currentTitle = "Utanför öppettider"
+        currentBody = ""
+        currentKind = "sleep"
+        currentSourceUrl = null
+        reportHeartbeat(null, currentTitle, currentBody, currentKind, currentSourceUrl)
     }
 
     private fun contentColumn() = LinearLayout(this).apply {
