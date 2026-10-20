@@ -13,6 +13,7 @@ let playlists = [];
 let channels = [];
 let channelSchedules = [];
 let teamMembers = [];
+let screenCommands = [];
 let currentRole = null;
 let statusTimer = null;
 let screensLoadId = 0;
@@ -63,6 +64,7 @@ function setSession(user) {
     channels = [];
     channelSchedules = [];
     teamMembers = [];
+    screenCommands = [];
     currentRole = null;
     screenList.replaceChildren();
     clearInterval(statusTimer);
@@ -156,13 +158,15 @@ async function loadScreens() {
     { data: playlistData, error: playlistError },
     { data: memberData, error: memberError },
     { data: channelData, error: channelError },
-    { data: channelScheduleData, error: channelScheduleError }
+    { data: channelScheduleData, error: channelScheduleError },
+    { data: commandData, error: commandError }
   ] = await Promise.all([
     supabase.from('screens').select('*').order('created_at', { ascending: false }),
     supabase.from('playlists').select('*').order('name', { ascending: true }),
     supabase.from('team_members').select('user_id,email,role').order('email', { ascending: true }),
     supabase.from('channels').select('*').order('name', { ascending: true }),
-    supabase.from('screen_channel_schedules').select('*').order('priority', { ascending: true })
+    supabase.from('screen_channel_schedules').select('*').order('priority', { ascending: true }),
+    supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100)
   ]);
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
@@ -170,6 +174,7 @@ async function loadScreens() {
   if (memberError) return toast(memberError.message, true);
   if (channelError) return toast(channelError.message, true);
   if (channelScheduleError) return toast(channelScheduleError.message, true);
+  if (commandError) return toast(commandError.message, true);
   teamMembers = memberData || [];
   currentRole = teamMembers.find(member => member.user_id === userId)?.role || null;
   updateRoleVisibility();
@@ -196,6 +201,7 @@ async function loadScreens() {
   playlists = nextPlaylists;
   channels = nextChannels;
   channelSchedules = channelScheduleData || [];
+  screenCommands = commandData || [];
   updateChannelControls();
   $('#emptyState').classList.toggle('hidden', screens.length > 0);
   const duplicateNames = new Map();
@@ -206,7 +212,7 @@ async function loadScreens() {
   screenList.replaceChildren(...screens.map((screen, index) => {
     const { data: slides, error: slideError } = slideResults[index];
     if (slideError) toast(slideError.message, true);
-    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(String(screen.name || '').trim().toLocaleLowerCase('sv-SE')) || 1);
+    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(String(screen.name || '').trim().toLocaleLowerCase('sv-SE')) || 1, screenCommands.find(command => command.screen_id === screen.id));
   }));
   updateScreenSummary();
   renderTeamMembers();
@@ -261,9 +267,12 @@ function updateScreenSummary() {
 
 async function refreshScreenStatus() {
   if (!currentUser) return;
-  const { data, error } = await supabase.from('screens')
-    .select('id,last_seen_at,current_title,current_body,current_kind,current_source_url,current_slide_id,forced_slide_id');
-  if (error) return;
+  const [{ data, error }, { data: commandData, error: commandError }] = await Promise.all([
+    supabase.from('screens').select('id,last_seen_at,current_title,current_body,current_kind,current_source_url,current_slide_id,forced_slide_id'),
+    supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100)
+  ]);
+  if (error || commandError) return;
+  screenCommands = commandData || [];
   const liveById = new Map((data || []).map(item => [item.id, item]));
   screens = screens.map(screen => ({ ...screen, ...(liveById.get(screen.id) || {}) }));
   updateScreenSummary();
@@ -289,6 +298,8 @@ async function refreshScreenStatus() {
     }
     const forceButton = card.querySelector('.return-playlist');
     if (forceButton) forceButton.classList.toggle('hidden', !screen.forced_slide_id);
+    const commandStatus = card.querySelector('[data-command-status]');
+    if (commandStatus) commandStatus.textContent = formatCommandStatus(screenCommands.find(command => command.screen_id === screen.id));
     card.querySelectorAll('[data-slide-action="show-now"]').forEach(button => {
       button.classList.toggle('selected', button.dataset.id === screen.forced_slide_id);
       button.textContent = button.dataset.id === screen.forced_slide_id ? 'Visas nu' : 'Visa nu';
@@ -298,6 +309,17 @@ async function refreshScreenStatus() {
 
 function kindLabel(kind) {
   return ({ text: 'Textmeddelande', video: 'Video', clock: 'Klocka & datum', feed: 'JSON-feed', web: 'Webbsida / live dashboard' })[kind] || kind || '—';
+}
+
+function formatCommandStatus(command) {
+  if (!command) return 'Inga fjärrkommandon ännu.';
+  const time = command.completed_at || command.created_at;
+  const clock = time ? new Date(time).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' }) : '';
+  if (command.status === 'pending') return `Väntar på TV:n · ${clock}`;
+  if (command.status === 'running') return `TV:n utför kommandot · ${clock}`;
+  if (command.status === 'failed') return `Misslyckades · ${command.error_message || 'okänt fel'} · ${clock}`;
+  const label = command.command === 'restart_player' ? 'Omstart kvitterad' : 'Synk kvitterad';
+  return `${label} · ${clock}`;
 }
 
 function updateCurrentPreview(container, screen, online) {
@@ -338,7 +360,7 @@ function scheduleFields() {
   return `<div class="schedule-fields"><div class="weekday-picker" aria-label="Återkommande veckodagar">${days.map(([value, label]) => `<label><input type="checkbox" name="weekdays" value="${value}" /><span>${label}</span></label>`).join('')}</div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från datum och tid" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till datum och tid" /></div><div class="inline-fields"><input class="schedule-input" name="daily_from" type="time" aria-label="Visa dagligen från" /><input class="schedule-input" name="daily_until" type="time" aria-label="Visa dagligen till" /></div><span class="schedule-help">Valda dagar och klockslag återkommer varje vecka. Lämna tomt för alltid.</span></div>`;
 }
 
-function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1) {
+function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, latestCommand = null) {
   const canAdmin = currentRole === 'admin';
   const canEdit = canAdmin || currentRole === 'editor';
   const card = document.createElement('article');
@@ -360,7 +382,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1) 
       <label class="playlist-assignment ${canAdmin ? '' : 'hidden'}">Spellista för den här skärmen<select class="screen-playlist">${playlistOptions}</select><span>En spellista kan delas av flera skärmar.</span></label>
       <form class="screen-layout-form ${canAdmin ? '' : 'hidden'}"><label>Skärmlayout<select name="layout_type"><option value="single" ${screen.layout_type === 'single' ? 'selected' : ''}>En zon · fullskärm</option><option value="bottom_ticker" ${screen.layout_type === 'bottom_ticker' ? 'selected' : ''}>Huvudyta + ticker längst ned</option><option value="side_panel" ${screen.layout_type === 'side_panel' ? 'selected' : ''}>Huvudyta + sidopanel</option></select></label><label class="layout-text-label">Zontext<input name="layout_text" maxlength="500" value="${esc(screen.layout_text || '')}" placeholder="Meddelande som visas i den andra zonen" /></label><button class="button ghost small" type="submit">Spara layout</button></form>
       <section class="channel-assignment ${canEdit ? '' : 'hidden'}"><div class="channel-heading"><div><strong>Kanalschema</strong><span>Aktiv kanal prioriteras framför skärmens grundspellista. Lägre prioritetstal vinner.</span></div></div><form class="channel-schedule-form"><select name="channel_id" required>${channelOptions}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Kanalprioritet" />${scheduleFields()}<button class="button ghost small" type="submit">＋ Schemalägg kanal</button></form><div class="channel-schedule-list">${assignedChannels.map(item => { const channel = channels.find(c => c.id === item.channel_id); return `<div class="channel-schedule-row"><div><strong>${esc(channel?.name || 'Okänd kanal')}</strong><span>Prioritet ${item.priority} · ${scheduleSummary(item)}</span></div><button class="button ghost small remove-channel-schedule" data-id="${esc(item.id)}">Ta bort</button></div>`; }).join('') || '<div class="slide-sub">Inga kanaler schemalagda för den här skärmen.</div>'}</div></section>
-      <div class="player-operations ${canEdit ? '' : 'hidden'}"><div><strong>Fjärråtgärder</strong><span>Kommandon köas tills TV:n ansluter.</span></div><div class="player-operation-buttons"><button class="button ghost small" data-player-command="sync_now">Synka nu</button><button class="button ghost small" data-player-command="restart_player">Starta om spelaren</button></div></div>
+      <div class="player-operations ${canEdit ? '' : 'hidden'}"><div><strong>Fjärråtgärder</strong><span class="player-command-status" data-command-status>${esc(formatCommandStatus(latestCommand))}</span></div><div class="player-operation-buttons"><button class="button ghost small" data-player-command="sync_now">Synka nu</button><button class="button ghost small" data-player-command="restart_player">Starta om spelaren</button></div></div>
       <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id && canEdit ? '' : 'hidden'}">Återgå till spellistan</button></div>
       <div class="playlist">${slides.map((slide, index) => renderSlide(slide, index, slides.length, canEdit)).join('') || '<div class="slide-sub">Spellistan är tom. Lägg till ett objekt nedan.</div>'}</div>
       <div class="slide-add-grid ${canEdit ? '' : 'hidden'}">
@@ -423,6 +445,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1) 
       toast(button.dataset.playerCommand === 'restart_player'
         ? `Omstart köad för “${screen.name}”.`
         : `Synk köad för “${screen.name}”.`);
+      refreshScreenStatus();
     } finally {
       button.disabled = false;
     }
