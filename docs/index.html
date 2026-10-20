@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#10131b" />
+    <title>Signage Studio</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="./"><span class="brand-mark">S</span><span>Signage<span class="brand-light">Studio</span></span></a>
+        <span class="top-note"><span class="status-dot"></span> DIGITAL SIGNAGE</span>
+      </header>
+
+      <section id="setupNotice" class="notice hidden"></section>
+
+      <section id="authView" class="auth-layout">
+        <div class="hero-copy">
+          <div class="eyebrow">DIN SKÄRM. DITT INNEHÅLL.</div>
+          <h1>En tydligare<br /><span>bild av ditt budskap.</span></h1>
+          <p>Skapa spellistor, publicera media och styr Philips-TV:n från ett och samma ställe.</p>
+          <div class="feature-row"><span>01 <b>Publicera</b></span><span>02 <b>Synka</b></span><span>03 <b>Visa</b></span></div>
+        </div>
+        <div class="auth-card panel">
+          <div class="section-kicker">ADMIN</div>
+          <h2>Logga in</h2>
+          <p class="muted">Vi skickar en säker inloggningslänk till din e-post.</p>
+          <form id="loginForm">
+            <label for="email">E-postadress</label>
+            <input id="email" type="email" autocomplete="email" placeholder="du@exempel.se" required />
+            <button class="button primary full" type="submit">Skicka inloggningslänk <span>→</span></button>
+          </form>
+          <div id="authMessage" class="form-message" aria-live="polite"></div>
+          <p class="fine-print">Åtkomst ges bara till konton som administratören har bjudit in.</p>
+        </div>
+      </section>
+
+      <section id="appView" class="hidden">
+        <div class="dashboard-heading">
+          <div><div class="eyebrow">ÖVERSIKT</div><h1>Skärmar & spellistor</h1><p class="muted">Publicera innehåll till TV:n. Spelaren sparar material lokalt och fortsätter även offline.</p></div>
+          <div class="account-box"><span id="userEmail"></span><button id="signOut" class="button ghost small">Logga ut</button></div>
+        </div>
+        <div class="toolbar">
+          <div class="toolbar-title"><span class="live-pulse"></span><span id="screenCount">0 skärmar</span></div>
+          <form id="createScreenForm" class="create-screen-form"><input id="screenName" maxlength="48" placeholder="Namn på skärmen" required /><button class="button primary" type="submit">＋ Ny skärm</button></form>
+        </div>
+        <div id="screenList" class="screen-list"></div>
+        <div id="emptyState" class="empty-state hidden"><div class="empty-icon">▣</div><h2>Din första skärm börjar här</h2><p>Skapa en skärm, koppla TV-appen med parkopplingskoden och lägg till ditt första innehåll.</p></div>
+      </section>
+      <footer class="footer"><span>Signage Studio <span id="year"></span></span><span>Native player · Offline-ready</span></footer>
+    </main>
+  </body>
+</html>
