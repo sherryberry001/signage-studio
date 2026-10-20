@@ -562,9 +562,15 @@ function renderSlide(slide, index, count, canEdit) {
 }
 
 async function setForcedSlide(screen, slideId) {
-  const { error } = await supabase.rpc('set_screen_forced_slide', { input_screen_id: screen.id, input_slide_id: slideId });
+  const duration = slideId ? Number(prompt('Hur länge ska utskicket visas? Ange minuter (1–1440).', '10')) : null;
+  if (slideId && (!Number.isInteger(duration) || duration < 1 || duration > 1440)) return;
+  const { error } = await supabase.rpc('set_screen_cast', {
+    input_screen_id: screen.id,
+    input_slide_id: slideId,
+    input_duration_minutes: duration
+  });
   if (error) return toast(error.message, true);
-  toast(slideId ? 'Skärmen byter innehåll inom några sekunder.' : 'Spellistan aktiveras igen.');
+  toast(slideId ? `Utskicket visas i ${duration} minuter och återgår sedan automatiskt.` : 'Spellistan aktiveras igen.');
   await loadScreens();
 }
 
