@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261021-media-library-v2" />
-    <script type="module" src="./app.js?v=20261021-media-library-v2"></script>
+    <link rel="stylesheet" href="./style.css?v=20261021-channel-playlists" />
+    <script type="module" src="./app.js?v=20261021-channel-playlists"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -55,9 +55,10 @@
           <form id="createPlaylistForm"><input id="playlistName" maxlength="80" placeholder="Namn på ny spellista" required /><button class="button ghost" type="submit">＋ Skapa spellista</button></form>
         </div>
         <div class="playlist-library-bar channel-library-bar">
-          <div><strong>Kanaler & scheman</strong><span>En kanal är en spellista som kan visas enligt ett eget schema på valda skärmar.</span></div>
+          <div><strong>Kanaler & scheman</strong><span>Bygg en kanal av flera spellistor med egna tider och lägg den på de skärmar som ska använda den.</span></div>
           <form id="createChannelForm"><input id="channelName" maxlength="80" placeholder="Namn på kanal" required /><select id="channelPlaylist" required aria-label="Spellista för kanal"><option value="">Välj spellista</option></select><button class="button ghost" type="submit">＋ Skapa kanal</button></form>
         </div>
+        <div id="channelManagementList" class="channel-management-list"></div>
         <section id="mediaLibraryPanel" class="team-panel media-library-panel">
           <div class="team-heading"><div><strong>Innehållsbibliotek</strong><span>Spara länkar, live-data, text och video en gång. Lägg sedan till dem i valfri spellista.</span></div><input id="mediaSearch" type="search" placeholder="Sök namn eller tagg…" aria-label="Sök i innehållsbiblioteket" /></div>
           <form id="mediaLibraryForm" class="media-library-form">

@@ -436,17 +436,30 @@ class MainActivity : Activity() {
     /** Select an active channel locally so the same schedule remains usable offline. */
     private fun eligibleSlides(): List<JSONObject> {
         val all = (0 until slides.length()).mapNotNull { slides.optJSONObject(it) }
-        val forced = all.firstOrNull { it.optBoolean("forced") }
+        val now = Instant.now()
+        val forced = all.firstOrNull { item ->
+            if (!item.optBoolean("forced")) return@firstOrNull false
+            val forcedUntil = item.optString("forced_until")
+                .takeIf { it.isNotBlank() && it != "null" }
+                ?.let { runCatching { Instant.parse(it) }.getOrNull() }
+            forcedUntil == null || now.isBefore(forcedUntil)
+        }
         if (forced != null) return listOf(forced)
 
-        val activeChannel = all.asSequence()
-            .filter { it.optString("channel_id").isNotBlank() && it.optString("channel_id") != "null" }
-            .filter { item -> isScheduled(item, "channel_active_from", "channel_active_until", "channel_weekdays", "channel_daily_start_time", "channel_daily_end_time") }
-            .sortedBy { it.optInt("channel_priority", 100) }
-            .firstOrNull()?.optString("channel_id")
+        val channelItems = all.filter { item ->
+            item.optString("channel_id").isNotBlank() && item.optString("channel_id") != "null" &&
+                isScheduled(item, "channel_active_from", "channel_active_until", "channel_weekdays", "channel_daily_start_time", "channel_daily_end_time") &&
+                isScheduled(item, "channel_playlist_active_from", "channel_playlist_active_until", "channel_playlist_weekdays", "channel_playlist_daily_start_time", "channel_playlist_daily_end_time") &&
+                isScheduled(item)
+        }
+        val activeChannel = channelItems.minWithOrNull(
+            compareBy<JSONObject> { it.optInt("channel_priority", 100) }
+                .thenBy { it.optInt("channel_playlist_priority", 100) }
+                .thenBy { it.optInt("channel_playlist_order", 0) }
+        )?.optString("channel_id")
 
         val selected = if (activeChannel != null) {
-            all.filter { it.optString("channel_id") == activeChannel && isScheduled(it) }
+            channelItems.filter { it.optString("channel_id") == activeChannel }
         } else {
             all.filter { (it.isNull("channel_id") || it.optString("channel_id") == "null") && isScheduled(it) }
         }

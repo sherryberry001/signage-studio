@@ -11,6 +11,7 @@ let currentUser = null;
 let screens = [];
 let playlists = [];
 let channels = [];
+let channelPlaylists = [];
 let channelSchedules = [];
 let teamMembers = [];
 let screenCommands = [];
@@ -64,6 +65,7 @@ function setSession(user) {
     screens = [];
     playlists = [];
     channels = [];
+    channelPlaylists = [];
     channelSchedules = [];
     teamMembers = [];
     screenCommands = [];
@@ -149,7 +151,37 @@ $('#createChannelForm').addEventListener('submit', async event => {
   const { error } = await supabase.from('channels').insert({ name, playlist_id });
   if (error) return toast(error.message, true);
   event.currentTarget.reset();
-  toast('Kanalen skapades. Tilldela den till en skärm och välj ett schema.');
+  toast('Kanalen skapades med sin första spellista. Lägg till fler spellistor och scheman nedan.');
+  await loadScreens();
+});
+
+$('#channelManagementList').addEventListener('submit', async event => {
+  const form = event.target.closest('.channel-playlist-form');
+  if (!form) return;
+  event.preventDefault();
+  const values = new FormData(form);
+  const schedule = scheduleValues(values);
+  if (!schedule) return;
+  const channel_id = form.dataset.channelId;
+  const playlist_id = String(values.get('playlist_id') || '');
+  if (channelPlaylists.some(item => item.channel_id === channel_id && item.playlist_id === playlist_id)) return toast('Spellistan finns redan i kanalen.', true);
+  const { data: last, error: orderError } = await supabase.from('channel_playlists').select('sort_order').eq('channel_id', channel_id).order('sort_order', { ascending: false }).limit(1).maybeSingle();
+  if (orderError) return toast(orderError.message, true);
+  const { error } = await supabase.from('channel_playlists').insert({ channel_id, playlist_id, sort_order: (last?.sort_order ?? -1) + 1, priority: Number(values.get('priority')) || 100, ...schedule });
+  if (error) return toast(error.message, true);
+  toast('Spellistan och dess visningsschema lades till i kanalen.');
+  await loadScreens();
+});
+
+$('#channelManagementList').addEventListener('click', async event => {
+  const button = event.target.closest('[data-channel-playlist-remove]');
+  if (!button) return;
+  const item = channelPlaylists.find(row => row.id === button.dataset.channelPlaylistRemove);
+  if (!item) return;
+  const playlist = playlists.find(row => row.id === item.playlist_id);
+  if (!confirm(`Ta bort “${playlist?.name || 'spellistan'}” från den här kanalen?`)) return;
+  const { error } = await supabase.from('channel_playlists').delete().eq('id', item.id);
+  if (error) return toast(error.message, true);
   await loadScreens();
 });
 
@@ -191,6 +223,7 @@ async function loadScreens() {
     { data: playlistData, error: playlistError },
     { data: memberData, error: memberError },
     { data: channelData, error: channelError },
+    { data: channelPlaylistData, error: channelPlaylistError },
     { data: channelScheduleData, error: channelScheduleError },
     { data: commandData, error: commandError },
     { data: mediaData, error: mediaError }
@@ -199,6 +232,7 @@ async function loadScreens() {
     supabase.from('playlists').select('*').order('name', { ascending: true }),
     supabase.from('team_members').select('user_id,email,role').order('email', { ascending: true }),
     supabase.from('channels').select('*').order('name', { ascending: true }),
+    supabase.from('channel_playlists').select('*').order('channel_id').order('sort_order'),
     supabase.from('screen_channel_schedules').select('*').order('priority', { ascending: true }),
     supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100),
     supabase.from('media_library').select('*').order('updated_at', { ascending: false }).limit(300)
@@ -208,6 +242,7 @@ async function loadScreens() {
   if (playlistError) return toast(playlistError.message, true);
   if (memberError) return toast(memberError.message, true);
   if (channelError) return toast(channelError.message, true);
+  if (channelPlaylistError) return toast(channelPlaylistError.message, true);
   if (channelScheduleError) return toast(channelScheduleError.message, true);
   if (commandError) return toast(commandError.message, true);
   if (mediaError && mediaError.code !== '42P01') return toast(mediaError.message, true);
@@ -227,6 +262,12 @@ async function loadScreens() {
   const nextScreens = data || [];
   const nextPlaylists = playlistData || [];
   const nextChannels = channelData || [];
+  const assignedChannelIds = new Set((channelScheduleData || []).map(item => item.channel_id));
+  const assignedChannelPlaylistIds = [...new Set((channelPlaylistData || []).filter(item => assignedChannelIds.has(item.channel_id)).map(item => item.playlist_id))];
+  const { data: channelSlideData, error: channelSlideError } = assignedChannelPlaylistIds.length
+    ? await supabase.from('slides').select('*').in('playlist_id', assignedChannelPlaylistIds).order('sort_order', { ascending: true })
+    : { data: [], error: null };
+  if (channelSlideError) return toast(channelSlideError.message, true);
   const slideResults = await Promise.all(nextScreens.map(screen =>
     supabase.from('slides').select('*')
       .eq(screen.playlist_id ? 'playlist_id' : 'screen_id', screen.playlist_id || screen.id)
@@ -236,10 +277,12 @@ async function loadScreens() {
   screens = nextScreens;
   playlists = nextPlaylists;
   channels = nextChannels;
+  channelPlaylists = channelPlaylistData || [];
   channelSchedules = channelScheduleData || [];
   screenCommands = commandData || [];
   mediaLibrary = mediaData || [];
   updateChannelControls();
+  updateChannelManagement();
   renderMediaLibrary();
   $('#emptyState').classList.toggle('hidden', screens.length > 0);
   const duplicateNames = new Map();
@@ -250,7 +293,10 @@ async function loadScreens() {
   screenList.replaceChildren(...screens.map((screen, index) => {
     const { data: slides, error: slideError } = slideResults[index];
     if (slideError) toast(slideError.message, true);
-    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(String(screen.name || '').trim().toLocaleLowerCase('sv-SE')) || 1, screenCommands.find(command => command.screen_id === screen.id));
+    const screenChannelIds = new Set(channelSchedules.filter(item => item.screen_id === screen.id).map(item => item.channel_id));
+    const screenChannelPlaylistIds = new Set(channelPlaylists.filter(item => screenChannelIds.has(item.channel_id)).map(item => item.playlist_id));
+    const screenChannelSlides = (channelSlideData || []).filter(item => screenChannelPlaylistIds.has(item.playlist_id));
+    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(String(screen.name || '').trim().toLocaleLowerCase('sv-SE')) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides);
   }));
   selectedScreenIds.forEach(id => { if (!screens.some(screen => screen.id === id)) selectedScreenIds.delete(id); });
   $('#selectVisibleScreens').classList.toggle('hidden', !['admin', 'editor'].includes(currentRole));
@@ -275,6 +321,22 @@ function updateRoleVisibility() {
 function updateChannelControls() {
   const select = $('#channelPlaylist');
   if (select) select.innerHTML = `<option value="">Välj spellista</option>${playlists.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('')}`;
+}
+
+function updateChannelManagement() {
+  const container = $('#channelManagementList');
+  if (!container) return;
+  const canEdit = ['admin', 'editor'].includes(currentRole);
+  container.replaceChildren(...channels.map(channel => {
+    const memberships = channelPlaylists.filter(item => item.channel_id === channel.id);
+    const usedIds = new Set(memberships.map(item => item.playlist_id));
+    const available = playlists.filter(playlist => !usedIds.has(playlist.id));
+    const card = document.createElement('article');
+    card.className = 'channel-manage-card';
+    card.innerHTML = `<div class="channel-manage-heading"><strong>${esc(channel.name)}</strong><span>${memberships.length} spellistor</span></div><div class="channel-playlist-items">${memberships.map(item => { const playlist = playlists.find(value => value.id === item.playlist_id); return `<div class="channel-playlist-item"><div><strong>${esc(playlist?.name || 'Okänd spellista')}</strong><span>Prioritet ${item.priority} · ordning ${item.sort_order + 1} · ${scheduleSummary(item)}</span></div><button class="button ghost small" type="button" data-channel-playlist-remove="${esc(item.id)}" ${canEdit ? '' : 'hidden'}>Ta bort</button></div>`; }).join('') || '<div class="slide-sub">Kanalen har inga spellistor.</div>'}</div>${canEdit ? `<form class="channel-playlist-form" data-channel-id="${esc(channel.id)}"><select name="playlist_id" required aria-label="Spellista att lägga till"><option value="">Lägg till spellista</option>${available.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('')}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Prioritet" />${scheduleFields()}<button class="button ghost small" type="submit" ${available.length ? '' : 'disabled'}>＋ Lägg till i kanalen</button></form>` : ''}`;
+    return card;
+  }));
+  if (!channels.length) container.innerHTML = '<div class="slide-sub">Skapa en kanal och välj dess första spellista ovan.</div>';
 }
 
 function renderMediaLibrary() {
@@ -471,6 +533,10 @@ async function refreshScreenStatus() {
       button.classList.toggle('selected', button.dataset.id === screen.forced_slide_id);
       button.textContent = button.dataset.id === screen.forced_slide_id ? 'Visas nu' : 'Visa nu';
     });
+    card.querySelectorAll('.channel-show-now').forEach(button => {
+      button.classList.toggle('selected', button.dataset.id === screen.forced_slide_id);
+      button.textContent = button.dataset.id === screen.forced_slide_id ? 'Visas nu' : 'Visa nu';
+    });
   }
   applyScreenFilters();
 }
@@ -528,7 +594,7 @@ function scheduleFields() {
   return `<div class="schedule-fields"><div class="weekday-picker" aria-label="Återkommande veckodagar">${days.map(([value, label]) => `<label><input type="checkbox" name="weekdays" value="${value}" /><span>${label}</span></label>`).join('')}</div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från datum och tid" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till datum och tid" /></div><div class="inline-fields"><input class="schedule-input" name="daily_from" type="time" aria-label="Visa dagligen från" /><input class="schedule-input" name="daily_until" type="time" aria-label="Visa dagligen till" /></div><span class="schedule-help">Valda dagar och klockslag återkommer varje vecka. Lämna tomt för alltid.</span></div>`;
 }
 
-function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, latestCommand = null) {
+function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, latestCommand = null, channelSlides = []) {
   const canAdmin = currentRole === 'admin';
   const canEdit = canAdmin || currentRole === 'editor';
   const card = document.createElement('article');
@@ -538,7 +604,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   const playlistOptions = [`<option value="">Skärmens egen spellista</option>`, ...playlists.map(playlist =>
     `<option value="${playlist.id}" ${playlist.id === screen.playlist_id ? 'selected' : ''}>${esc(playlist.name)}</option>`
   )].join('');
-  const channelOptions = [`<option value="">Välj kanal</option>`, ...channels.map(channel => `<option value="${esc(channel.id)}">${esc(channel.name)} · ${esc(playlists.find(p => p.id === channel.playlist_id)?.name || 'spellista')}</option>`)].join('');
+  const channelOptions = [`<option value="">Välj kanal</option>`, ...channels.map(channel => `<option value="${esc(channel.id)}">${esc(channel.name)} · ${channelPlaylists.filter(item => item.channel_id === channel.id).length} spellistor</option>`)].join('');
   card.innerHTML = `
     <div class="screen-head">
       <div class="screen-title-wrap"><input class="screen-select ${canEdit ? '' : 'hidden'}" type="checkbox" ${selectedScreenIds.has(screen.id) ? 'checked' : ''} aria-label="Välj ${esc(screen.name)}" /><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · möjlig dubblett (${sameNameCount} med samma namn)` : ''}</div></div></div>
@@ -553,6 +619,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
       <div class="player-operations ${canEdit ? '' : 'hidden'}"><div><strong>Fjärråtgärder</strong><span class="player-command-status" data-command-status>${esc(formatCommandStatus(latestCommand))}</span></div><div class="player-operation-buttons"><button class="button ghost small" data-player-command="sync_now">Synka nu</button><button class="button ghost small" data-player-command="restart_player">Starta om spelaren</button></div></div>
       <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id && canEdit ? '' : 'hidden'}">Återgå till spellistan</button></div>
       <div class="playlist">${slides.map((slide, index) => renderSlide(slide, index, slides.length, canEdit)).join('') || '<div class="slide-sub">Spellistan är tom. Lägg till ett objekt nedan.</div>'}</div>
+      ${channelSlides.length ? `<details class="screen-channel-content"><summary>Innehåll från skärmens kanaler · ${channelSlides.length} objekt</summary><div class="playlist">${channelSlides.map(slide => `<div class="slide-row"><div class="slide-thumb">${slide.kind === 'video' ? '▶' : slide.kind === 'feed' || slide.kind === 'web' ? '↗' : slide.kind === 'clock' ? '◷' : 'T'}</div><div><div class="slide-title">${esc(slide.title || kindLabel(slide.kind))}</div><div class="slide-sub">${esc(kindLabel(slide.kind))} · ${esc(playlists.find(item => item.id === slide.playlist_id)?.name || 'spellista')}</div></div><div class="slide-buttons"><button class="button ghost small channel-show-now" data-id="${esc(slide.id)}" ${canEdit ? '' : 'hidden'}>Visa nu</button></div></div>`).join('')}</div></details>` : ''}
       <div class="slide-add-grid ${canEdit ? '' : 'hidden'}">
         <div class="add-box"><h3>Textmeddelande</h3><form class="text-slide-form add-text"><input name="title" maxlength="80" placeholder="Rubrik" required /><textarea name="body" maxlength="1200" placeholder="Meddelande" required></textarea><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="15" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Publicera text</button></div>${scheduleFields()}</form></div>
         <div class="add-box"><h3>Video eller live-data</h3><form class="text-slide-form add-source"><select name="kind"><option value="video">Video (MP4-länk eller fil)</option><option value="feed">Live-data / JSON-feed (API)</option></select><input name="title" maxlength="80" placeholder="Namn på innehåll" required /><input name="url" type="url" placeholder="https://… eller intern API-adress" /><label class="file-label">För video kan du också välja MP4-fil <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime" /></label><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="30" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till</button></div>${scheduleFields()}</form></div>
@@ -633,6 +700,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   card.querySelector('.add-source').addEventListener('submit', event => addSource(event, screen, slides.length));
   card.querySelector('.add-web').addEventListener('submit', event => addWeb(event, screen));
   card.querySelectorAll('[data-slide-action]').forEach(button => button.addEventListener('click', () => slideAction(button, screen, slides)));
+  card.querySelectorAll('.channel-show-now').forEach(button => button.addEventListener('click', () => setForcedSlide(screen, button.dataset.id)));
   card.querySelector('.return-playlist').addEventListener('click', async () => setForcedSlide(screen, null));
   return card;
 }
