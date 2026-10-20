@@ -9,6 +9,7 @@ const screenList = $('#screenList');
 const notice = $('#setupNotice');
 let currentUser = null;
 let screens = [];
+let playlists = [];
 let statusTimer = null;
 let screensLoadId = 0;
 
@@ -96,19 +97,38 @@ $('#createScreenForm').addEventListener('submit', async event => {
   await loadScreens();
 });
 
+$('#createPlaylistForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const name = $('#playlistName').value.trim();
+  const { error } = await supabase.from('playlists').insert({ name });
+  if (error) return toast(error.message, true);
+  form.reset();
+  toast('Spellistan skapades. Tilldela den till en eller flera skärmar.');
+  await loadScreens();
+});
+
 async function loadScreens() {
   if (!currentUser) return;
   const loadId = ++screensLoadId;
   const userId = currentUser.id;
-  const { data, error } = await supabase.from('screens').select('*').order('created_at', { ascending: false });
+  const [{ data, error }, { data: playlistData, error: playlistError }] = await Promise.all([
+    supabase.from('screens').select('*').order('created_at', { ascending: false }),
+    supabase.from('playlists').select('*').order('name', { ascending: true })
+  ]);
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
+  if (playlistError) return toast(playlistError.message, true);
   const nextScreens = data || [];
+  const nextPlaylists = playlistData || [];
   const slideResults = await Promise.all(nextScreens.map(screen =>
-    supabase.from('slides').select('*').eq('screen_id', screen.id).order('sort_order', { ascending: true })
+    supabase.from('slides').select('*')
+      .eq(screen.playlist_id ? 'playlist_id' : 'screen_id', screen.playlist_id || screen.id)
+      .order('sort_order', { ascending: true })
   ));
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   screens = nextScreens;
+  playlists = nextPlaylists;
   $('#emptyState').classList.toggle('hidden', screens.length > 0);
   screenList.replaceChildren(...screens.map((screen, index) => {
     const { data: slides, error: slideError } = slideResults[index];
@@ -206,6 +226,9 @@ function renderScreen(screen, slides) {
   card.className = 'screen-card';
   card.dataset.screenId = screen.id;
   const pending = screen.pair_code ? `<span class="pair-pill">KOD ${esc(screen.pair_code)}</span>` : '<span class="pair-pill">PARKOPPLAD</span>';
+  const playlistOptions = [`<option value="">Skärmens egen spellista</option>`, ...playlists.map(playlist =>
+    `<option value="${playlist.id}" ${playlist.id === screen.playlist_id ? 'selected' : ''}>${esc(playlist.name)}</option>`
+  )].join('');
   card.innerHTML = `
     <div class="screen-head">
       <div class="screen-title-wrap"><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${slides.length} objekt</div></div></div>
@@ -214,6 +237,7 @@ function renderScreen(screen, slides) {
     <div class="screen-status-row"><div class="screen-live-status ${isOnline(screen) ? 'online' : 'offline'}"><span class="status-indicator"></span><span class="status-label">${isOnline(screen) ? 'Online nu' : 'Offline'}</span><span class="last-seen">${screen.last_seen_at ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Spelaren har inte rapporterat ännu'}</span></div><div class="current-content ${isOnline(screen) ? '' : 'stale'}"><span class="current-content-label">VISAS JUST NU</span><strong class="current-title">${esc(isOnline(screen) ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt')}</strong><span class="current-kind">${esc(isOnline(screen) ? kindLabel(screen.current_kind) : 'Skärmen är offline')}</span><div class="current-preview"></div></div></div>
     <div class="screen-body">
       <p class="pair-help">${screen.pair_code ? 'Öppna Signage Player på TV:n och skriv koden ovan. Koden kan bara användas en gång.' : 'TV:n är parkopplad. Nytt innehåll synkas automatiskt och sparas lokalt för offlinevisning.'}</p>
+      <label class="playlist-assignment">Spellista för den här skärmen<select class="screen-playlist">${playlistOptions}</select><span>En spellista kan delas av flera skärmar.</span></label>
       <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id ? '' : 'hidden'}">Återgå till spellistan</button></div>
       <div class="playlist">${slides.map((slide, index) => renderSlide(slide, index, slides.length)).join('') || '<div class="slide-sub">Spellistan är tom. Lägg till ett objekt nedan.</div>'}</div>
       <div class="slide-add-grid">
@@ -228,6 +252,13 @@ function renderScreen(screen, slides) {
   card.querySelector('.toggle-screen').addEventListener('click', async () => {
     const { error } = await supabase.from('screens').update({ is_active: !screen.is_active }).eq('id', screen.id);
     if (error) toast(error.message, true); else loadScreens();
+  });
+  card.querySelector('.screen-playlist').addEventListener('change', async event => {
+    const playlist_id = event.currentTarget.value || null;
+    const { error } = await supabase.from('screens').update({ playlist_id, forced_slide_id: null }).eq('id', screen.id);
+    if (error) return toast(error.message, true);
+    toast(playlist_id ? 'Spellistan tilldelades skärmen.' : 'Skärmen använder sin egen spellista.');
+    await loadScreens();
   });
   card.querySelector('.delete-screen').addEventListener('click', async () => {
     if (!confirm(`Ta bort skärmen “${screen.name}” och dess spellista?`)) return;
@@ -261,13 +292,19 @@ async function addWeb(event, screen) {
   const f = new FormData(form);
   const source_url = String(f.get('url') || '').trim();
   if (!/^https?:\/\//i.test(source_url)) return toast('Ange en adress som börjar med HTTPS eller HTTP.', true);
-  const { error } = await supabase.from('slides').insert({ screen_id: screen.id, kind: 'web', title: String(f.get('title') || '').trim(), source_url, duration_seconds: Number(f.get('duration')) || 60, sort_order: await nextOrder(screen.id), is_active: true, ...scheduleValues(f) });
+  const { error } = await supabase.from('slides').insert({ ...contentOwner(screen), kind: 'web', title: String(f.get('title') || '').trim(), source_url, duration_seconds: Number(f.get('duration')) || 60, sort_order: await nextOrder(screen), is_active: true, ...scheduleValues(f) });
   if (error) return toast(error.message, true);
   form.reset(); toast('Webbsidan lades till i spellistan.'); await loadScreens();
 }
 
-async function nextOrder(screenId) {
-  const { data, error } = await supabase.from('slides').select('sort_order').eq('screen_id', screenId).order('sort_order', { ascending: false }).limit(1).maybeSingle();
+function contentOwner(screen) {
+  return screen.playlist_id ? { screen_id: null, playlist_id: screen.playlist_id } : { screen_id: screen.id, playlist_id: null };
+}
+
+async function nextOrder(screen) {
+  const column = screen.playlist_id ? 'playlist_id' : 'screen_id';
+  const value = screen.playlist_id || screen.id;
+  const { data, error } = await supabase.from('slides').select('sort_order').eq(column, value).order('sort_order', { ascending: false }).limit(1).maybeSingle();
   if (error) throw error;
   return (data?.sort_order ?? -1) + 1;
 }
@@ -284,7 +321,7 @@ async function addSlide(event, screen, kind) {
   event.preventDefault();
   const form = event.currentTarget;
   const f = new FormData(form);
-  const values = { screen_id: screen.id, kind, title: String(f.get('title') || '').trim(), body: String(f.get('body') || '').trim(), duration_seconds: Number(f.get('duration')) || 15, sort_order: await nextOrder(screen.id), is_active: true, ...scheduleValues(f) };
+  const values = { ...contentOwner(screen), kind, title: String(f.get('title') || '').trim(), body: String(f.get('body') || '').trim(), duration_seconds: Number(f.get('duration')) || 15, sort_order: await nextOrder(screen), is_active: true, ...scheduleValues(f) };
   const { error } = await supabase.from('slides').insert(values);
   if (error) return toast(error.message, true);
   form.reset(); toast('Innehållet publicerades.'); await loadScreens();
@@ -300,13 +337,13 @@ async function addSource(event, screen) {
   if (kind === 'feed' && file instanceof File && file.size > 0) return toast('JSON-feed använder en URL. Välj en videofil bara för video.', true);
   if (file instanceof File && file.size > 0) {
     if (file.size > 400 * 1024 * 1024) return toast('Videofilen får vara högst 400 MB i den här versionen.', true);
-    const path = `${screen.id}/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const path = `${screen.playlist_id || screen.id}/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     const { error: uploadError } = await supabase.storage.from('signage-assets').upload(path, file, { cacheControl: '0', upsert: false });
     if (uploadError) return toast(uploadError.message, true);
     source_url = supabase.storage.from('signage-assets').getPublicUrl(path).data.publicUrl;
   }
   if (!source_url) return toast('Ange en videolänk, en feed-URL eller välj en videofil.', true);
-  const { error } = await supabase.from('slides').insert({ screen_id: screen.id, kind, title: String(f.get('title') || '').trim(), source_url, duration_seconds: Number(f.get('duration')) || 30, sort_order: await nextOrder(screen.id), is_active: true, ...scheduleValues(f) });
+  const { error } = await supabase.from('slides').insert({ ...contentOwner(screen), kind, title: String(f.get('title') || '').trim(), source_url, duration_seconds: Number(f.get('duration')) || 30, sort_order: await nextOrder(screen), is_active: true, ...scheduleValues(f) });
   if (error) return toast(error.message, true);
   form.reset(); toast('Innehållet publicerades.'); await loadScreens();
 }
