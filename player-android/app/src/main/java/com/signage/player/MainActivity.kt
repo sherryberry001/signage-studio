@@ -146,7 +146,10 @@ class MainActivity : Activity() {
                 slides = fresh
                 lastSync = "Synkad ${DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.now())}"
                 preloadVideos(fresh)
-                if (changed) handler.post { index = 0; showCurrentSlide() }
+                if (changed || fresh.length() == 0) handler.post {
+                    if (changed) index = 0
+                    showCurrentSlide()
+                }
             } catch (_: Exception) {
                 val saved = prefs.getString("playlist", "[]") ?: "[]"
                 slides = try { JSONArray(saved) } catch (_: Exception) { JSONArray() }
