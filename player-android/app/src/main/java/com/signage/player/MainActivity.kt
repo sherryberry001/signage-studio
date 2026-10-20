@@ -151,6 +151,7 @@ class MainActivity : Activity() {
         heartbeatTask = object : Runnable {
             override fun run() {
                 reportHeartbeat(currentSlide, currentTitle, currentBody, currentKind, currentSourceUrl)
+                pollPlayerCommand()
                 handler.postDelayed(this, 15_000)
             }
         }
@@ -170,8 +171,11 @@ class MainActivity : Activity() {
         handler.postDelayed(scheduleTask!!, 15_000)
     }
 
-    private fun syncPlaylist() {
-        val id = screenId ?: return
+    private fun syncPlaylist(onComplete: ((String?) -> Unit)? = null) {
+        val id = screenId ?: run {
+            onComplete?.invoke("Spelaren är inte parkopplad.")
+            return
+        }
         worker.execute {
             try {
                 val result = apiRequest("${baseUrl()}/rest/v1/rpc/player_playlist", "POST", JSONObject().put("input_screen_id", id).toString())
@@ -186,14 +190,56 @@ class MainActivity : Activity() {
                     if (changed) index = 0
                     showCurrentSlide()
                 }
+                onComplete?.invoke(null)
             } catch (_: Exception) {
                 val saved = prefs.getString("playlist", "[]") ?: "[]"
                 slides = try { JSONArray(saved) } catch (_: Exception) { JSONArray() }
                 val savedTime = prefs.getString("last_sync", null)
                 lastSync = savedTime?.let { "Offline · senast synkad ${formatTime(it)}" } ?: "Offline · inget innehåll sparat"
                 handler.post { if (slides.length() > 0) showCurrentSlide() else showMessage("Ingen anslutning", "När TV:n får nät igen synkas innehållet automatiskt.") }
+                onComplete?.invoke("Kunde inte synka innehållet.")
             }
         }
+    }
+
+    private fun pollPlayerCommand() {
+        val id = screenId ?: return
+        worker.execute {
+            try {
+                val result = apiRequest(
+                    "${baseUrl()}/rest/v1/rpc/player_claim_command",
+                    "POST",
+                    JSONObject().put("input_screen_id", id).toString()
+                )
+                val commands = JSONArray(result)
+                if (commands.length() == 0) return@execute
+                val commandItem = commands.optJSONObject(0) ?: return@execute
+                val commandId = commandItem.optString("command_id")
+                val command = commandItem.optString("command")
+                when (command) {
+                    "sync_now" -> {
+                        syncPlaylist { error -> completePlayerCommand(id, commandId, error) }
+                        return@execute
+                    }
+                    "restart_player" -> {
+                        completePlayerCommand(id, commandId, null)
+                        handler.post { recreate() }
+                        return@execute
+                    }
+                    else -> completePlayerCommand(id, commandId, "Okänt kommando.")
+                }
+            } catch (_: Exception) { }
+        }
+    }
+
+    private fun completePlayerCommand(screen: String, command: String, error: String?) {
+        try {
+            val body = JSONObject()
+                .put("input_screen_id", screen)
+                .put("input_command_id", command)
+                .put("input_error", error ?: JSONObject.NULL)
+            apiRequest("${baseUrl()}/rest/v1/rpc/player_complete_command", "POST", body.toString())
+        } catch (_: Exception) { }
     }
 
     private fun preloadVideos(items: JSONArray) {
@@ -724,6 +770,7 @@ class MainActivity : Activity() {
         clockTask?.let(handler::removeCallbacks)
         refreshTask?.let(handler::removeCallbacks)
         heartbeatTask?.let(handler::removeCallbacks)
+        scheduleTask?.let(handler::removeCallbacks)
         playerVideo?.stopPlayback()
         worker.shutdownNow()
         super.onDestroy()
