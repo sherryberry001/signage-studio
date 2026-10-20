@@ -540,8 +540,12 @@ class MainActivity : Activity() {
         val midnight = Color.rgb(20, 11, 38)
         val dawn = Color.rgb(42, 20, 80)
         val spark = Color.rgb(255, 194, 14)
+        val danger = Color.rgb(255, 128, 128)
         val white = Color.WHITE
         val global = payload.optJSONObject("global") ?: JSONObject()
+        val generatedAt = payload.optString("generated_at")
+        val dataAgeSeconds = runCatching { java.time.Duration.between(Instant.parse(generatedAt), Instant.now()).seconds.coerceAtLeast(0) }.getOrNull()
+        val stale = dataAgeSeconds == null || dataAgeSeconds > 90
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(38, 24, 38, 24)
@@ -568,7 +572,12 @@ class MainActivity : Activity() {
             setPadding(0, 3, 0, 0)
         })
         header.addView(heading, LinearLayout.LayoutParams(0, -2, 1f))
-        header.addView(label("UPPDATERAD ${payload.optString("generated_at").take(16).replace('T', ' ')}", 12, spark, true))
+        val freshness = when {
+            dataAgeSeconds == null -> "DATATID OKÄND"
+            stale -> "DATA ÄLDRE · ${dataAgeSeconds.div(60)} MIN"
+            else -> "LIVE · ${generatedAt.take(16).replace('T', ' ')} UTC"
+        }
+        header.addView(label(freshness, 12, if (stale) danger else spark, true))
         page.addView(header, LinearLayout.LayoutParams(-1, 72))
 
         val stats = LinearLayout(this).apply {
@@ -649,6 +658,39 @@ class MainActivity : Activity() {
         }
         columns.addView(alertColumn, LinearLayout.LayoutParams(0, -1, 1f))
         page.addView(columns, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        val patch = payload.optJSONObject("patch_stats") ?: JSONObject()
+        val latestSync = payload.optJSONArray("sync_jobs")?.optJSONObject(0)
+        val syncStatus = latestSync?.optString("status")?.takeIf { !it.isNullOrBlank() && it != "null" } ?: "Inga körningar"
+        val syncTime = latestSync?.optString("completed_at")?.takeIf { !it.isNullOrBlank() && it != "null" }
+            ?: latestSync?.optString("started_at")?.takeIf { !it.isNullOrBlank() && it != "null" }
+        val os = payload.optJSONArray("os_breakdown") ?: JSONArray()
+        val osSummary = (0 until minOf(os.length(), 4)).mapNotNull { index ->
+            os.optJSONObject(index)?.let { "${it.optString("os_family")} ${it.optString("count")}" }
+        }.joinToString("  ·  ")
+        val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val patchCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(18, 10, 18, 10)
+            setBackgroundColor(dawn)
+        }
+        patchCard.addView(label("PATCHSTATUS", 11, spark, true).apply { gravity = Gravity.LEFT })
+        patchCard.addView(label(
+            "${patch.optString("pending", "0")} väntande  ·  ${patch.optString("critical_pending", "0")} kritiska  ·  ${patch.optString("compliance_pct", "0")}% uppdaterade",
+            16, white, false
+        ).apply { gravity = Gravity.LEFT; setPadding(0, 5, 0, 0) })
+        footer.addView(patchCard, LinearLayout.LayoutParams(0, 78, 1f).apply { rightMargin = 10 })
+
+        val syncCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(18, 10, 18, 10)
+            setBackgroundColor(dawn)
+        }
+        syncCard.addView(label("SYNK & ENHETER", 11, spark, true).apply { gravity = Gravity.LEFT })
+        val syncDetail = listOfNotNull(syncStatus, syncTime?.take(16)?.replace('T', ' '), osSummary.takeIf { it.isNotBlank() }).joinToString("  ·  ")
+        syncCard.addView(label(syncDetail, 14, white, false).apply { gravity = Gravity.LEFT; setPadding(0, 5, 0, 0); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+        footer.addView(syncCard, LinearLayout.LayoutParams(0, 78, 1f))
+        page.addView(footer, LinearLayout.LayoutParams(-1, 86).apply { topMargin = 10 })
         root.addView(page, FrameLayout.LayoutParams(-1, -1))
     }
 
