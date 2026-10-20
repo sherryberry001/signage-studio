@@ -1,0 +1,5 @@
+.DS_Store
+player-android/signage.properties
+player-android/local.properties
+player-android/.gradle/
+player-android/**/build/
