@@ -20,8 +20,39 @@ let currentRole = null;
 let statusTimer = null;
 let screensLoadId = 0;
 const selectedScreenIds = new Set();
+let activeWorkspace = 'screens';
+const workspaceDetails = {
+  screens: ['Skärmar', 'Övervaka anslutning, innehåll och status för dina skärmar.'],
+  content: ['Innehåll', 'Hantera återanvändbara spellistor och innehållsbiblioteket.'],
+  channels: ['Kanaler', 'Planera vad som ska visas, när det ska visas och på vilka skärmar.'],
+  team: ['Team', 'Hantera personer och åtkomst till Signage Studio.']
+};
 
 $('#year').textContent = new Date().getFullYear();
+
+$('#workspaceNavigation').addEventListener('click', event => {
+  const button = event.target.closest('[data-workspace]');
+  if (button && !button.classList.contains('hidden')) setWorkspace(button.dataset.workspace);
+});
+
+function setWorkspace(workspace) {
+  if (!workspaceDetails[workspace]) return;
+  if (workspace === 'team' && currentRole !== 'admin') return;
+  activeWorkspace = workspace;
+  document.querySelectorAll('[data-workspace-panel]').forEach(panel => {
+    panel.classList.toggle('hidden', panel.dataset.workspacePanel !== workspace);
+  });
+  document.querySelectorAll('.workspace-tab').forEach(button => {
+    const active = button.dataset.workspace === workspace;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
+  $('#workspaceTitle').textContent = workspaceDetails[workspace][0];
+  $('#workspaceDescription').textContent = workspaceDetails[workspace][1];
+}
+
+setWorkspace('screens');
 
 function configured() {
   return !SUPABASE_URL.includes('YOUR-PROJECT') && !SUPABASE_ANON_KEY.includes('YOUR_');
@@ -72,6 +103,8 @@ function setSession(user) {
     mediaLibrary = [];
     selectedScreenIds.clear();
     currentRole = null;
+    activeWorkspace = 'screens';
+    setWorkspace('screens');
     screenList.replaceChildren();
     clearInterval(statusTimer);
   }
@@ -347,6 +380,12 @@ function updateRoleVisibility() {
   $('#mediaLibraryPanel').classList.toggle('hidden', !currentRole);
   $('#mediaLibraryForm').classList.toggle('hidden', !editor);
   $('#teamPanel').classList.toggle('hidden', !admin);
+  $('#createPlaylistForm').closest('.playlist-library-bar').classList.toggle('role-hidden', !editor);
+  document.querySelectorAll('.workspace-tab').forEach(button => {
+    button.classList.toggle('hidden', (button.dataset.workspace === 'team' && !admin)
+      || (button.dataset.workspace !== 'screens' && !currentRole));
+  });
+  if (!currentRole || (activeWorkspace === 'team' && !admin)) setWorkspace('screens');
 }
 
 function updateChannelControls() {
