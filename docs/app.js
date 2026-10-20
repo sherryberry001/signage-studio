@@ -286,10 +286,26 @@ function renderMediaLibrary() {
   list.replaceChildren(...results.map(item => {
     const row = document.createElement('article');
     row.className = 'media-library-row';
-    row.innerHTML = `<div class="media-library-detail"><strong>${esc(item.title)}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s ${item.tags?.length ? `· ${item.tags.map(tag => `#${esc(tag)}`).join(' ')}` : ''}</span><small>${esc(item.source_url || item.body || '')}</small></div><div class="media-library-actions"><select aria-label="Välj spellista för ${esc(item.title)}" data-library-playlist>${options}</select><button class="button ghost small" type="button" data-library-add="${esc(item.id)}" ${['admin','editor'].includes(currentRole) ? '' : 'disabled'}>Lägg till</button><button class="icon-button delete" type="button" aria-label="Ta bort ${esc(item.title)}" data-library-delete="${esc(item.id)}" ${currentRole === 'admin' || currentRole === 'editor' ? '' : 'hidden'}>×</button></div>`;
+    row.innerHTML = `<div class="media-library-main"><div class="media-library-detail"><strong>${esc(item.title)}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s ${item.tags?.length ? `· ${item.tags.map(tag => `#${esc(tag)}`).join(' ')}` : ''}</span><small>${esc(item.source_url || item.body || '')}</small></div><details class="media-library-edit" ${['admin','editor'].includes(currentRole) ? '' : 'hidden'}><summary>Redigera</summary><form data-library-edit="${esc(item.id)}"><input name="title" maxlength="120" value="${esc(item.title)}" required aria-label="Namn" /><input name="source_url" type="url" value="${esc(item.source_url || '')}" placeholder="Källans URL" aria-label="Källans URL" /><textarea name="body" maxlength="1200" placeholder="Textinnehåll" aria-label="Textinnehåll">${esc(item.body || '')}</textarea><input name="tags" maxlength="200" value="${esc((item.tags || []).join(', '))}" placeholder="Taggar, separerade med komma" aria-label="Taggar" /><button class="button ghost small" type="submit">Spara ändringar</button></form></details></div><div class="media-library-actions"><select aria-label="Välj spellista för ${esc(item.title)}" data-library-playlist>${options}</select><button class="button ghost small" type="button" data-library-add="${esc(item.id)}" ${['admin','editor'].includes(currentRole) ? '' : 'disabled'}>Lägg till</button><button class="icon-button delete" type="button" aria-label="Ta bort ${esc(item.title)}" data-library-delete="${esc(item.id)}" ${currentRole === 'admin' || currentRole === 'editor' ? '' : 'hidden'}>×</button></div>`;
     return row;
   }));
   if (!results.length) list.innerHTML = '<div class="slide-sub">Inget innehåll matchar sökningen.</div>';
+  list.querySelectorAll('[data-library-edit]').forEach(form => form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const id = form.dataset.libraryEdit;
+    const asset = mediaLibrary.find(item => item.id === id);
+    const values = new FormData(form);
+    const title = String(values.get('title') || '').trim();
+    const source_url = String(values.get('source_url') || '').trim();
+    const body = String(values.get('body') || '').trim();
+    if (['web', 'feed', 'video'].includes(asset.kind) && !/^https?:\/\//i.test(source_url)) return toast('Ange en giltig HTTP- eller HTTPS-källa.', true);
+    if (asset.kind === 'text' && !body) return toast('Textinnehållet får inte vara tomt.', true);
+    const tags = [...new Set(String(values.get('tags') || '').split(',').map(tag => tag.trim().toLocaleLowerCase('sv-SE')).filter(Boolean))];
+    const { error } = await supabase.from('media_library').update({ title, source_url: source_url || null, body, tags, updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) return toast(error.message, true);
+    toast('Biblioteksposten och dess spellistereferenser uppdaterades.');
+    await loadScreens();
+  }));
   list.querySelectorAll('[data-library-add]').forEach(button => button.addEventListener('click', async () => {
     const row = button.closest('.media-library-row');
     const playlist_id = row.querySelector('[data-library-playlist]').value;
@@ -297,14 +313,14 @@ function renderMediaLibrary() {
     const asset = mediaLibrary.find(item => item.id === button.dataset.libraryAdd);
     const { data: last, error: orderError } = await supabase.from('slides').select('sort_order').eq('playlist_id', playlist_id).order('sort_order', { ascending: false }).limit(1).maybeSingle();
     if (orderError) return toast(orderError.message, true);
-    const { error } = await supabase.from('slides').insert({ playlist_id, screen_id: null, kind: asset.kind, title: asset.title, body: asset.body, source_url: asset.source_url, duration_seconds: asset.duration_seconds, sort_order: (last?.sort_order ?? -1) + 1, is_active: true });
+    const { error } = await supabase.from('slides').insert({ playlist_id, screen_id: null, library_asset_id: asset.id, kind: asset.kind, title: asset.title, body: asset.body, source_url: asset.source_url, duration_seconds: asset.duration_seconds, sort_order: (last?.sort_order ?? -1) + 1, is_active: true });
     if (error) return toast(error.message, true);
     toast(`“${asset.title}” lades till i spellistan.`);
     await loadScreens();
   }));
   list.querySelectorAll('[data-library-delete]').forEach(button => button.addEventListener('click', async () => {
     const asset = mediaLibrary.find(item => item.id === button.dataset.libraryDelete);
-    if (!asset || !confirm(`Ta bort “${asset.title}” från biblioteket? Innehåll som redan kopierats till spellistor påverkas inte.`)) return;
+    if (!asset || !confirm(`Ta bort “${asset.title}” från biblioteket? Referenser i spellistor blir fristående innehåll.`)) return;
     const { error } = await supabase.from('media_library').delete().eq('id', asset.id);
     if (error) return toast(error.message, true);
     await loadScreens();

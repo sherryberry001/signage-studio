@@ -1,5 +1,5 @@
--- Shared, searchable content library. Playlist entries remain independent copies,
--- so editing one playlist never changes another display unexpectedly.
+-- Shared searchable content library. Playlist entries retain a reference to
+-- the asset so content changes propagate consistently across assigned screens.
 begin;
 
 create table if not exists public.media_library (
@@ -16,6 +16,32 @@ create table if not exists public.media_library (
 
 create index if not exists media_library_title_idx on public.media_library using gin (to_tsvector('simple', title));
 create index if not exists media_library_tags_idx on public.media_library using gin (tags);
+
+alter table public.slides add column if not exists library_asset_id uuid references public.media_library(id) on delete set null;
+create index if not exists slides_library_asset_idx on public.slides(library_asset_id) where library_asset_id is not null;
+
+create or replace function public.sync_media_library_references()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.slides
+  set kind = new.kind,
+      title = new.title,
+      body = new.body,
+      source_url = new.source_url
+  where library_asset_id = new.id;
+  return new;
+end;
+$$;
+revoke all on function public.sync_media_library_references() from public;
+drop trigger if exists sync_media_library_references on public.media_library;
+create trigger sync_media_library_references
+  after update of kind, title, body, source_url on public.media_library
+  for each row execute function public.sync_media_library_references();
+
 alter table public.media_library enable row level security;
 revoke all on public.media_library from anon;
 grant select, insert, update, delete on public.media_library to authenticated;

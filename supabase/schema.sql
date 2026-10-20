@@ -85,6 +85,7 @@ create table if not exists public.slides (
   title text not null default '',
   body text not null default '',
   source_url text,
+  library_asset_id uuid references public.media_library(id) on delete set null,
   duration_seconds integer not null default 15 check (duration_seconds between 5 and 600),
   sort_order integer not null default 0,
   is_active boolean not null default true,
@@ -96,6 +97,26 @@ create table if not exists public.slides (
   created_at timestamptz not null default now(),
   constraint slides_content_owner_check check ((screen_id is null) <> (playlist_id is null))
 );
+
+create index if not exists slides_library_asset_idx on public.slides(library_asset_id) where library_asset_id is not null;
+create or replace function public.sync_media_library_references()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.slides
+  set kind = new.kind, title = new.title, body = new.body, source_url = new.source_url
+  where library_asset_id = new.id;
+  return new;
+end;
+$$;
+revoke all on function public.sync_media_library_references() from public;
+drop trigger if exists sync_media_library_references on public.media_library;
+create trigger sync_media_library_references
+  after update of kind, title, body, source_url on public.media_library
+  for each row execute function public.sync_media_library_references();
 
 -- Upgrade existing installations in place.
 alter table public.screens add column if not exists last_seen_at timestamptz;
