@@ -19,6 +19,7 @@ import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.VideoView
@@ -443,28 +444,153 @@ class MainActivity : Activity() {
         val source = item.optString("source_url")
         showMessage(title.ifBlank { "Informationsflöde" }, "Hämtar aktuell information …")
         worker.execute {
-            val text = try {
+            val raw = try {
                 val key = "feed_${sha256(source)}"
-                val fresh = URL(source).openConnection().run {
+                val displayToken = Uri.parse(source).fragment?.removePrefix("token=")?.takeIf { it.isNotBlank() }
+                val fresh = URL(source.substringBefore('#')).openConnection().run {
                     connectTimeout = 8_000; readTimeout = 8_000
                     setRequestProperty("Cache-Control", "no-cache, no-store, max-age=0")
                     setRequestProperty("Pragma", "no-cache")
+                    if (displayToken != null) setRequestProperty("x-pulse-display-token", displayToken)
                     getInputStream().bufferedReader().use { it.readText() }
                 }
                 prefs.edit().putString(key, fresh).apply()
-                renderFeed(fresh)
+                fresh
             } catch (_: Exception) {
-                prefs.getString("feed_${sha256(source)}", null)?.let(::renderFeed) ?: "Ingen feed kunde hämtas."
+                prefs.getString("feed_${sha256(source)}", null)
             }
             handler.post {
                 if (generation == slideGeneration) {
-                    showText(title.ifBlank { "Informationsflöde" }, text)
+                    val payload = raw?.let { runCatching { JSONObject(it) }.getOrNull() }
+                    if (payload?.optString("format") == "dizparc-pulse-signage") {
+                        showPulseDashboard(item, payload)
+                    } else {
+                        showText(title.ifBlank { "Informationsflöde" }, raw?.let(::renderFeed) ?: "Ingen feed kunde hämtas.")
+                    }
                     currentTitle = title.ifBlank { "Informationsflöde" }
-                    currentBody = text
-                    reportHeartbeat(item, title.ifBlank { "Informationsflöde" }, text, "feed", source)
+                    currentBody = if (payload?.optString("format") == "dizparc-pulse-signage") "Pulse liveöversikt" else raw?.let(::renderFeed).orEmpty()
+                    reportHeartbeat(item, title.ifBlank { "Informationsflöde" }, currentBody, "feed", source)
+                    applyMultiZoneLayout(item)
                 }
             }
         }
+    }
+
+    private fun showPulseDashboard(item: JSONObject, payload: JSONObject) {
+        root.removeAllViews()
+        val midnight = Color.rgb(20, 11, 38)
+        val dawn = Color.rgb(42, 20, 80)
+        val spark = Color.rgb(255, 194, 14)
+        val white = Color.WHITE
+        val global = payload.optJSONObject("global") ?: JSONObject()
+        val page = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(38, 24, 38, 24)
+            setBackgroundColor(midnight)
+        }
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val logo = ImageView(this).apply {
+            setImageResource(R.drawable.dizparc_logo_white)
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_START
+        }
+        header.addView(logo, LinearLayout.LayoutParams(190, 62))
+        val heading = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 0, 0, 0)
+        }
+        heading.addView(label("Pulse · Live operations", 24, white, true).apply { gravity = Gravity.LEFT })
+        heading.addView(label("Överblick från NinjaRMM och Pulse", 14, Color.rgb(220, 214, 230), false).apply {
+            gravity = Gravity.LEFT
+            setPadding(0, 3, 0, 0)
+        })
+        header.addView(heading, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(label("UPPDATERAD ${payload.optString("generated_at").take(16).replace('T', ' ')}", 12, spark, true))
+        page.addView(header, LinearLayout.LayoutParams(-1, 72))
+
+        val stats = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 12, 0, 18)
+        }
+        val kpis = listOf(
+            "KUNDER" to global.optString("total_customers", "0"),
+            "ENHETER" to global.optString("total_devices", "0"),
+            "ONLINE" to global.optString("devices_online", "0"),
+            "KRITISKA LARM" to global.optString("critical_alerts", "0"),
+            "SNITTHÄLSA" to global.optString("avg_health_score", "0")
+        )
+        kpis.forEach { (name, value) ->
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(18, 12, 18, 12)
+                setBackgroundColor(dawn)
+            }
+            card.addView(label(name, 12, Color.rgb(224, 215, 240), true).apply { gravity = Gravity.LEFT })
+            card.addView(label(value, 30, if (name == "KRITISKA LARM" && value.toIntOrNull()?.let { it > 0 } == true) Color.rgb(255, 194, 14) else white, true).apply {
+                gravity = Gravity.LEFT
+                setPadding(0, 5, 0, 0)
+            })
+            val params = LinearLayout.LayoutParams(0, 76, 1f).apply {
+                if (name != "SNITTHÄLSA") rightMargin = 10
+            }
+            stats.addView(card, params)
+        }
+        page.addView(stats, LinearLayout.LayoutParams(-1, 108))
+
+        val columns = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val customerColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(18, 14, 18, 14)
+            setBackgroundColor(dawn)
+        }
+        customerColumn.addView(label("KUNDHÄLSA", 14, spark, true).apply { gravity = Gravity.LEFT })
+        val orgs = payload.optJSONArray("organizations") ?: JSONArray()
+        for (i in 0 until minOf(orgs.length(), 8)) {
+            val org = orgs.optJSONObject(i) ?: continue
+            val score = org.optInt("health_score", 0)
+            val line = "${org.optString("name")}  ·  $score  ·  ${org.optString("devices_online")}/${org.optString("total_devices")} online  ·  ${org.optString("critical_alerts")} larm"
+            customerColumn.addView(label(line, 15, if (score < 60) spark else white, false).apply {
+                gravity = Gravity.LEFT
+                setPadding(0, 13, 0, 0)
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+        }
+        columns.addView(customerColumn, LinearLayout.LayoutParams(0, -1, 1.25f).apply { rightMargin = 12 })
+
+        val alertColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(18, 14, 18, 14)
+            setBackgroundColor(dawn)
+        }
+        alertColumn.addView(label("AKTIVA LARM", 14, spark, true).apply { gravity = Gravity.LEFT })
+        val alerts = payload.optJSONArray("alerts") ?: JSONArray()
+        if (alerts.length() == 0) {
+            alertColumn.addView(label("Inga aktiva larm", 17, Color.rgb(113, 191, 68), true).apply {
+                gravity = Gravity.LEFT
+                setPadding(0, 16, 0, 0)
+            })
+        } else {
+            for (i in 0 until minOf(alerts.length(), 6)) {
+                val alert = alerts.optJSONObject(i) ?: continue
+                val severity = alert.optString("severity").uppercase(java.util.Locale("sv", "SE"))
+                val text = "$severity  ·  ${alert.optString("organization_name")}  ·  ${alert.optString("title")}"
+                alertColumn.addView(label(text, 14, white, false).apply {
+                    gravity = Gravity.LEFT
+                    setPadding(0, 11, 0, 0)
+                    maxLines = 2
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+            }
+        }
+        columns.addView(alertColumn, LinearLayout.LayoutParams(0, -1, 1f))
+        page.addView(columns, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(page, FrameLayout.LayoutParams(-1, -1))
     }
 
     private fun renderFeed(raw: String): String {

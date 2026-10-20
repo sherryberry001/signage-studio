@@ -98,12 +98,21 @@ supabase.auth.getSession().then(({ data }) => setSession(data.session?.user || n
 $('#createScreenForm').addEventListener('submit', async event => {
   event.preventDefault();
   const name = $('#screenName').value.trim();
+  const normalizedName = name.toLocaleLowerCase('sv-SE');
+  const existing = screens.find(screen => String(screen.name || '').trim().toLocaleLowerCase('sv-SE') === normalizedName);
+  if (existing && !confirm(`Det finns redan en skärm som heter “${existing.name}”. Varje post blir en separat TV i listan. Skapa ändå en till?`)) return;
   const pair_code = shortCode();
-  const { error } = await supabase.from('screens').insert({ name, pair_code, is_active: true });
-  if (error) return toast(error.message, true);
-  $('#screenName').value = '';
-  toast('Skärmen skapades. Ange parkopplingskoden i TV-appen.');
-  await loadScreens();
+  const submit = event.currentTarget.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  try {
+    const { error } = await supabase.from('screens').insert({ name, pair_code, is_active: true });
+    if (error) return toast(error.message, true);
+    $('#screenName').value = '';
+    toast('Skärmen skapades. Ange parkopplingskoden i TV-appen.');
+    await loadScreens();
+  } finally {
+    submit.disabled = false;
+  }
 });
 
 $('#teamRoleForm').addEventListener('submit', async event => {
@@ -189,10 +198,15 @@ async function loadScreens() {
   channelSchedules = channelScheduleData || [];
   updateChannelControls();
   $('#emptyState').classList.toggle('hidden', screens.length > 0);
+  const duplicateNames = new Map();
+  screens.forEach(screen => {
+    const key = String(screen.name || '').trim().toLocaleLowerCase('sv-SE');
+    duplicateNames.set(key, (duplicateNames.get(key) || 0) + 1);
+  });
   screenList.replaceChildren(...screens.map((screen, index) => {
     const { data: slides, error: slideError } = slideResults[index];
     if (slideError) toast(slideError.message, true);
-    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id));
+    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(String(screen.name || '').trim().toLocaleLowerCase('sv-SE')) || 1);
   }));
   updateScreenSummary();
   renderTeamMembers();
@@ -324,7 +338,7 @@ function scheduleFields() {
   return `<div class="schedule-fields"><div class="weekday-picker" aria-label="Återkommande veckodagar">${days.map(([value, label]) => `<label><input type="checkbox" name="weekdays" value="${value}" /><span>${label}</span></label>`).join('')}</div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från datum och tid" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till datum och tid" /></div><div class="inline-fields"><input class="schedule-input" name="daily_from" type="time" aria-label="Visa dagligen från" /><input class="schedule-input" name="daily_until" type="time" aria-label="Visa dagligen till" /></div><span class="schedule-help">Valda dagar och klockslag återkommer varje vecka. Lämna tomt för alltid.</span></div>`;
 }
 
-function renderScreen(screen, slides, assignedChannels = []) {
+function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1) {
   const canAdmin = currentRole === 'admin';
   const canEdit = canAdmin || currentRole === 'editor';
   const card = document.createElement('article');
@@ -337,7 +351,7 @@ function renderScreen(screen, slides, assignedChannels = []) {
   const channelOptions = [`<option value="">Välj kanal</option>`, ...channels.map(channel => `<option value="${esc(channel.id)}">${esc(channel.name)} · ${esc(playlists.find(p => p.id === channel.playlist_id)?.name || 'spellista')}</option>`)].join('');
   card.innerHTML = `
     <div class="screen-head">
-      <div class="screen-title-wrap"><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${slides.length} objekt</div></div></div>
+      <div class="screen-title-wrap"><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · möjlig dubblett (${sameNameCount} med samma namn)` : ''}</div></div></div>
       <div class="screen-actions">${pending}<button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
     </div>
     <div class="screen-status-row"><div class="screen-live-status ${isOnline(screen) ? 'online' : 'offline'}"><span class="status-indicator"></span><span class="status-label">${isOnline(screen) ? 'Online nu' : 'Offline'}</span><span class="last-seen">${screen.last_seen_at ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Spelaren har inte rapporterat ännu'}</span></div><div class="current-content ${isOnline(screen) ? '' : 'stale'}"><span class="current-content-label">VISAS JUST NU</span><strong class="current-title">${esc(isOnline(screen) ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt')}</strong><span class="current-kind">${esc(isOnline(screen) ? kindLabel(screen.current_kind) : 'Skärmen är offline')}</span><div class="current-preview"></div></div></div>
@@ -350,7 +364,7 @@ function renderScreen(screen, slides, assignedChannels = []) {
       <div class="playlist">${slides.map((slide, index) => renderSlide(slide, index, slides.length, canEdit)).join('') || '<div class="slide-sub">Spellistan är tom. Lägg till ett objekt nedan.</div>'}</div>
       <div class="slide-add-grid ${canEdit ? '' : 'hidden'}">
         <div class="add-box"><h3>Textmeddelande</h3><form class="text-slide-form add-text"><input name="title" maxlength="80" placeholder="Rubrik" required /><textarea name="body" maxlength="1200" placeholder="Meddelande" required></textarea><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="15" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Publicera text</button></div>${scheduleFields()}</form></div>
-        <div class="add-box"><h3>Video eller JSON-feed</h3><form class="text-slide-form add-source"><select name="kind"><option value="video">Video (MP4-länk eller fil)</option><option value="feed">JSON-feed</option></select><input name="title" maxlength="80" placeholder="Namn på innehåll" required /><input name="url" type="url" placeholder="https://…" /><label class="file-label">För video kan du också välja MP4-fil <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime" /></label><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="30" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till</button></div>${scheduleFields()}</form></div>
+        <div class="add-box"><h3>Video eller live-data</h3><form class="text-slide-form add-source"><select name="kind"><option value="video">Video (MP4-länk eller fil)</option><option value="feed">Live-data / JSON-feed (API)</option></select><input name="title" maxlength="80" placeholder="Namn på innehåll" required /><input name="url" type="url" placeholder="https://… eller intern API-adress" /><label class="file-label">För video kan du också välja MP4-fil <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime" /></label><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="30" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till</button></div>${scheduleFields()}</form></div>
         <div class="add-box"><h3>Klocka & datum</h3><form class="text-slide-form add-clock"><input name="title" maxlength="80" placeholder="Rubrik, till exempel Välkommen" /><input name="body" maxlength="180" placeholder="Valfri underrad" /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="20" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till klocka</button></div>${scheduleFields()}</form></div>
         <div class="add-box"><h3>Webbsida eller live-dashboard</h3><form class="text-slide-form add-web"><input name="title" maxlength="80" placeholder="Namn på sidan" required /><input name="url" type="url" placeholder="https://…" required /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="60" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till sida</button></div>${scheduleFields()}</form></div>
       </div>
