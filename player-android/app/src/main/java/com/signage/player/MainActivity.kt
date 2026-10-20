@@ -29,6 +29,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import java.time.Instant
+import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
@@ -48,6 +49,7 @@ class MainActivity : Activity() {
     private var advanceTask: Runnable? = null
     private var clockTask: Runnable? = null
     private var heartbeatTask: Runnable? = null
+    private var scheduleTask: Runnable? = null
     private var slideGeneration = 0
     private var currentSlide: JSONObject? = null
     private var currentTitle = "Väntar på innehåll"
@@ -152,6 +154,15 @@ class MainActivity : Activity() {
             }
         }
         handler.postDelayed(heartbeatTask!!, 15_000)
+        scheduleTask?.let(handler::removeCallbacks)
+        scheduleTask = object : Runnable {
+            override fun run() {
+                val current = currentSlide
+                if (current != null && !isScheduled(current)) showCurrentSlide()
+                handler.postDelayed(this, 15_000)
+            }
+        }
+        handler.postDelayed(scheduleTask!!, 15_000)
     }
 
     private fun syncPlaylist() {
@@ -302,7 +313,30 @@ class MainActivity : Activity() {
         val now = Instant.now()
         val from = item.optString("active_from").takeIf { it.isNotBlank() && it != "null" }?.let { runCatching { Instant.parse(it) }.getOrNull() }
         val until = item.optString("active_until").takeIf { it.isNotBlank() && it != "null" }?.let { runCatching { Instant.parse(it) }.getOrNull() }
-        return (from == null || !now.isBefore(from)) && (until == null || now.isBefore(until))
+        if ((from != null && now.isBefore(from)) || (until != null && !now.isBefore(until))) return false
+
+        val localNow = java.time.ZonedDateTime.now()
+        val weekdays = item.optJSONArray("weekdays")
+        val selectedDays = weekdays?.let { array -> (0 until array.length()).map { array.optInt(it) }.toSet() }
+        val startText = item.optString("daily_start_time").takeIf { it.isNotBlank() && it != "null" }
+        val endText = item.optString("daily_end_time").takeIf { it.isNotBlank() && it != "null" }
+        if (startText == null || endText == null) {
+            return selectedDays.isNullOrEmpty() || localNow.dayOfWeek.value in selectedDays
+        }
+
+        val start = runCatching { LocalTime.parse(startText) }.getOrNull() ?: return false
+        val end = runCatching { LocalTime.parse(endText) }.getOrNull() ?: return false
+        val time = localNow.toLocalTime()
+        if (start <= end) {
+            return (selectedDays.isNullOrEmpty() || localNow.dayOfWeek.value in selectedDays) && !time.isBefore(start) && time.isBefore(end)
+        }
+        // An overnight window belongs to the selected day on which it started.
+        if (!time.isBefore(start)) return selectedDays.isNullOrEmpty() || localNow.dayOfWeek.value in selectedDays
+        if (time.isBefore(end)) {
+            val previousDay = if (localNow.dayOfWeek.value == 1) 7 else localNow.dayOfWeek.value - 1
+            return selectedDays.isNullOrEmpty() || previousDay in selectedDays
+        }
+        return false
     }
 
     private fun showText(title: String, body: String) {

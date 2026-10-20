@@ -4,7 +4,7 @@ En liten, egen digital-signage-lösning för Philips Android TV. TV:n kör en na
 
 ## Innehåll som går att visa
 
-- Textmeddelanden med rubrik, brödtext, visningstid och tidsfönster.
+- Textmeddelanden med rubrik, brödtext, visningstid, engångsdatum och återkommande veckodagar/klockslag.
 - Klocka och datum med valfri rubrik/underrad.
 - Videor från uppladdad MP4 eller direkt MP4-länk. Appen hämtar videon till TV:ns lagring och spelar den lokalt.
 - En enkel JSON-feed. Spelaren läser fälten `message`, `value`, `subtitle`, `text`, `status` och `updated_at` ur ett JSON-objekt. Senaste lyckade feed-svaret sparas för offlinevisning.
@@ -14,7 +14,7 @@ Spelaren hämtar spellistan och rapporterar sin status var 15:e sekund. Adminvyn
 
 ## Publicera adminvyn på GitHub Pages
 
-1. Skapa ett Supabase-projekt och kör `supabase/schema.sql` i SQL Editor. För en befintlig installation kör du migrationsfilerna i ordning: `20261020_live_screen_control.sql`, sedan `20261020_reusable_playlists.sql`. Den andra migrationen skapar en återanvändbar spellista per befintlig skärm och flyttar över dess innehåll.
+1. Skapa ett Supabase-projekt och kör `supabase/schema.sql` i SQL Editor. För en befintlig installation kör du migrationsfilerna i ordning: `20261020_live_screen_control.sql`, `20261020_reusable_playlists.sql` och `20261020_recurring_schedule.sql`. Spellistemigrationen skapar en återanvändbar spellista per befintlig skärm och flyttar över dess innehåll; den sista lägger till återkommande veckoscheman.
 2. I Supabase Auth: stäng av publik registrering och bjud in de admin-konton som ska få ändra innehåll. Lägg till GitHub Pages-adressen under **URL Configuration → Redirect URLs** när den är känd.
 3. `admin/config.js` är redan konfigurerad med projektets Project URL och anon/public key. Anon-nyckeln är avsedd att finnas i klientkod; **service-role/secret-nyckeln får aldrig läggas i appen, GitHub Pages eller Android-bygget**. Åtkomst ska begränsas med RLS-policys.
 4. Skapa ett GitHub-repo och lägg upp innehållet i den här mappen på branchen `main`. Ett publikt repo passar GitHub Pages kostnadsfria flöde; det innehåller bara källkod och den avsedda publika Supabase anon-nyckeln.
@@ -34,7 +34,7 @@ Om TV:n inte startar appen automatiskt efter omstart behöver den ställas in so
 ## Lägga till innehåll
 
 - **Spellistor:** skapa en spellista och tilldela den till flera skärmar. Innehåll och ordning delas mellan alla skärmar som använder den. Skärmar kan även fortsätta med en egen spellista.
-- **Textmeddelande:** skriv rubrik/text, välj sekunder och ange valfritt start- och sluttid.
+- **Textmeddelande:** skriv rubrik/text, välj sekunder och ange valfritt datumintervall, veckodagar och dagliga klockslag. Veckodagar och tider följer TV:ns lokala tidszon; ett klockslag som går över midnatt räknas till dagen då visningsfönstret startar.
 - **Video:** ange en direktlänk eller ladda upp en MP4. Uppladdade videor ligger i en publik bucket eftersom TV:n ska kunna spela dem utan användarinloggning. Publicera därför bara innehåll som får visas offentligt.
 - **JSON-feed:** länken ska returnera ett JSON-objekt, till exempel `{"message":"Besöksmottagningen flyttar till entré B"}`.
 - **Klocka & datum:** visas enligt TV:ns lokala tid.

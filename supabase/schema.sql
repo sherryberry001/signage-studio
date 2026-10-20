@@ -40,6 +40,9 @@ create table if not exists public.slides (
   is_active boolean not null default true,
   active_from timestamptz,
   active_until timestamptz,
+  weekdays smallint[],
+  daily_start_time time,
+  daily_end_time time,
   created_at timestamptz not null default now(),
   constraint slides_content_owner_check check ((screen_id is null) <> (playlist_id is null))
 );
@@ -54,7 +57,14 @@ alter table public.screens add column if not exists current_source_url text;
 alter table public.screens add column if not exists forced_slide_id uuid;
 alter table public.screens add column if not exists playlist_id uuid references public.playlists(id) on delete set null;
 alter table public.slides add column if not exists playlist_id uuid references public.playlists(id) on delete cascade;
+alter table public.slides add column if not exists weekdays smallint[];
+alter table public.slides add column if not exists daily_start_time time;
+alter table public.slides add column if not exists daily_end_time time;
 alter table public.slides alter column screen_id drop not null;
+alter table public.slides drop constraint if exists slides_weekdays_check;
+alter table public.slides add constraint slides_weekdays_check check (weekdays is null or (cardinality(weekdays) between 1 and 7 and weekdays <@ array[1,2,3,4,5,6,7]::smallint[]));
+alter table public.slides drop constraint if exists slides_daily_window_check;
+alter table public.slides add constraint slides_daily_window_check check ((daily_start_time is null) = (daily_end_time is null));
 
 do $$
 declare

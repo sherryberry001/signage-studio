@@ -221,6 +221,11 @@ function updateCurrentPreview(container, screen, online) {
   }
 }
 
+function scheduleFields() {
+  const days = [['1', 'Mån'], ['2', 'Tis'], ['3', 'Ons'], ['4', 'Tor'], ['5', 'Fre'], ['6', 'Lör'], ['7', 'Sön']];
+  return `<div class="schedule-fields"><div class="weekday-picker" aria-label="Återkommande veckodagar">${days.map(([value, label]) => `<label><input type="checkbox" name="weekdays" value="${value}" /><span>${label}</span></label>`).join('')}</div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från datum och tid" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till datum och tid" /></div><div class="inline-fields"><input class="schedule-input" name="daily_from" type="time" aria-label="Visa dagligen från" /><input class="schedule-input" name="daily_until" type="time" aria-label="Visa dagligen till" /></div><span class="schedule-help">Valda dagar och klockslag återkommer varje vecka. Lämna tomt för alltid.</span></div>`;
+}
+
 function renderScreen(screen, slides) {
   const card = document.createElement('article');
   card.className = 'screen-card';
@@ -241,10 +246,10 @@ function renderScreen(screen, slides) {
       <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id ? '' : 'hidden'}">Återgå till spellistan</button></div>
       <div class="playlist">${slides.map((slide, index) => renderSlide(slide, index, slides.length)).join('') || '<div class="slide-sub">Spellistan är tom. Lägg till ett objekt nedan.</div>'}</div>
       <div class="slide-add-grid">
-        <div class="add-box"><h3>Textmeddelande</h3><form class="text-slide-form add-text"><input name="title" maxlength="80" placeholder="Rubrik" required /><textarea name="body" maxlength="1200" placeholder="Meddelande" required></textarea><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="15" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Publicera text</button></div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till" /></div></form></div>
-        <div class="add-box"><h3>Video eller JSON-feed</h3><form class="text-slide-form add-source"><select name="kind"><option value="video">Video (MP4-länk eller fil)</option><option value="feed">JSON-feed</option></select><input name="title" maxlength="80" placeholder="Namn på innehåll" required /><input name="url" type="url" placeholder="https://…" /><label class="file-label">För video kan du också välja MP4-fil <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime" /></label><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="30" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till</button></div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till" /></div></form></div>
-        <div class="add-box"><h3>Klocka & datum</h3><form class="text-slide-form add-clock"><input name="title" maxlength="80" placeholder="Rubrik, till exempel Välkommen" /><input name="body" maxlength="180" placeholder="Valfri underrad" /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="20" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till klocka</button></div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till" /></div></form></div>
-        <div class="add-box"><h3>Webbsida eller live-dashboard</h3><form class="text-slide-form add-web"><input name="title" maxlength="80" placeholder="Namn på sidan" required /><input name="url" type="url" placeholder="https://…" required /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="60" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till sida</button></div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till" /></div></form></div>
+        <div class="add-box"><h3>Textmeddelande</h3><form class="text-slide-form add-text"><input name="title" maxlength="80" placeholder="Rubrik" required /><textarea name="body" maxlength="1200" placeholder="Meddelande" required></textarea><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="15" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Publicera text</button></div>${scheduleFields()}</form></div>
+        <div class="add-box"><h3>Video eller JSON-feed</h3><form class="text-slide-form add-source"><select name="kind"><option value="video">Video (MP4-länk eller fil)</option><option value="feed">JSON-feed</option></select><input name="title" maxlength="80" placeholder="Namn på innehåll" required /><input name="url" type="url" placeholder="https://…" /><label class="file-label">För video kan du också välja MP4-fil <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime" /></label><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="30" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till</button></div>${scheduleFields()}</form></div>
+        <div class="add-box"><h3>Klocka & datum</h3><form class="text-slide-form add-clock"><input name="title" maxlength="80" placeholder="Rubrik, till exempel Välkommen" /><input name="body" maxlength="180" placeholder="Valfri underrad" /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="20" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till klocka</button></div>${scheduleFields()}</form></div>
+        <div class="add-box"><h3>Webbsida eller live-dashboard</h3><form class="text-slide-form add-web"><input name="title" maxlength="80" placeholder="Namn på sidan" required /><input name="url" type="url" placeholder="https://…" required /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="60" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till sida</button></div>${scheduleFields()}</form></div>
       </div>
     </div>`;
   updateCurrentPreview(card.querySelector('.current-preview'), screen, isOnline(screen));
@@ -292,7 +297,9 @@ async function addWeb(event, screen) {
   const f = new FormData(form);
   const source_url = String(f.get('url') || '').trim();
   if (!/^https?:\/\//i.test(source_url)) return toast('Ange en adress som börjar med HTTPS eller HTTP.', true);
-  const { error } = await supabase.from('slides').insert({ ...contentOwner(screen), kind: 'web', title: String(f.get('title') || '').trim(), source_url, duration_seconds: Number(f.get('duration')) || 60, sort_order: await nextOrder(screen), is_active: true, ...scheduleValues(f) });
+  const schedule = scheduleValues(f);
+  if (!schedule) return;
+  const { error } = await supabase.from('slides').insert({ ...contentOwner(screen), kind: 'web', title: String(f.get('title') || '').trim(), source_url, duration_seconds: Number(f.get('duration')) || 60, sort_order: await nextOrder(screen), is_active: true, ...schedule });
   if (error) return toast(error.message, true);
   form.reset(); toast('Webbsidan lades till i spellistan.'); await loadScreens();
 }
@@ -314,14 +321,38 @@ function scheduleValues(formData) {
     const value = String(formData.get(key) || '');
     return value ? new Date(value).toISOString() : null;
   };
-  return { active_from: toIso('from'), active_until: toIso('until') };
+  const activeFrom = String(formData.get('from') || '');
+  const activeUntil = String(formData.get('until') || '');
+  if (activeFrom && activeUntil && new Date(activeFrom) >= new Date(activeUntil)) {
+    toast('Sluttiden måste vara senare än starttiden.', true);
+    return null;
+  }
+  const dailyStart = String(formData.get('daily_from') || '') || null;
+  const dailyEnd = String(formData.get('daily_until') || '') || null;
+  if (Boolean(dailyStart) !== Boolean(dailyEnd)) {
+    toast('Ange både start- och sluttid för det återkommande klockslaget.', true);
+    return null;
+  }
+  if (dailyStart && dailyStart === dailyEnd) {
+    toast('Start- och sluttiden kan inte vara samma klockslag.', true);
+    return null;
+  }
+  return {
+    active_from: toIso('from'),
+    active_until: toIso('until'),
+    weekdays: (() => { const days = formData.getAll('weekdays').map(Number).filter(Boolean); return days.length ? days : null; })(),
+    daily_start_time: dailyStart,
+    daily_end_time: dailyEnd
+  };
 }
 
 async function addSlide(event, screen, kind) {
   event.preventDefault();
   const form = event.currentTarget;
   const f = new FormData(form);
-  const values = { ...contentOwner(screen), kind, title: String(f.get('title') || '').trim(), body: String(f.get('body') || '').trim(), duration_seconds: Number(f.get('duration')) || 15, sort_order: await nextOrder(screen), is_active: true, ...scheduleValues(f) };
+  const schedule = scheduleValues(f);
+  if (!schedule) return;
+  const values = { ...contentOwner(screen), kind, title: String(f.get('title') || '').trim(), body: String(f.get('body') || '').trim(), duration_seconds: Number(f.get('duration')) || 15, sort_order: await nextOrder(screen), is_active: true, ...schedule };
   const { error } = await supabase.from('slides').insert(values);
   if (error) return toast(error.message, true);
   form.reset(); toast('Innehållet publicerades.'); await loadScreens();
@@ -334,6 +365,8 @@ async function addSource(event, screen) {
   const kind = String(f.get('kind'));
   let source_url = String(f.get('url') || '').trim();
   const file = f.get('file');
+  const schedule = scheduleValues(f);
+  if (!schedule) return;
   if (kind === 'feed' && file instanceof File && file.size > 0) return toast('JSON-feed använder en URL. Välj en videofil bara för video.', true);
   if (file instanceof File && file.size > 0) {
     if (file.size > 400 * 1024 * 1024) return toast('Videofilen får vara högst 400 MB i den här versionen.', true);
@@ -343,7 +376,7 @@ async function addSource(event, screen) {
     source_url = supabase.storage.from('signage-assets').getPublicUrl(path).data.publicUrl;
   }
   if (!source_url) return toast('Ange en videolänk, en feed-URL eller välj en videofil.', true);
-  const { error } = await supabase.from('slides').insert({ ...contentOwner(screen), kind, title: String(f.get('title') || '').trim(), source_url, duration_seconds: Number(f.get('duration')) || 30, sort_order: await nextOrder(screen), is_active: true, ...scheduleValues(f) });
+  const { error } = await supabase.from('slides').insert({ ...contentOwner(screen), kind, title: String(f.get('title') || '').trim(), source_url, duration_seconds: Number(f.get('duration')) || 30, sort_order: await nextOrder(screen), is_active: true, ...schedule });
   if (error) return toast(error.message, true);
   form.reset(); toast('Innehållet publicerades.'); await loadScreens();
 }
