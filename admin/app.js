@@ -108,7 +108,15 @@ $('#createScreenForm').addEventListener('submit', async event => {
   const name = $('#screenName').value.trim();
   const normalizedName = name.toLocaleLowerCase('sv-SE');
   const existing = screens.find(screen => String(screen.name || '').trim().toLocaleLowerCase('sv-SE') === normalizedName);
-  if (existing && !confirm(`Det finns redan en skärm som heter “${existing.name}”. Varje post blir en separat TV i listan. Skapa ändå en till?`)) return;
+  if (existing) {
+    if (!confirm(`”${existing.name}” finns redan. Skapa en ny parkopplingskod till samma skärm och behåll dess inställningar? Välj Avbryt om du vill lägga till en annan TV och byt då namn så att profilerna går att skilja åt.`)) return;
+    const { data: code, error } = await supabase.rpc('renew_screen_pairing_code', { input_screen_id: existing.id });
+    if (error) return toast(error.message, true);
+    $('#screenName').value = '';
+    toast(`Ny parkopplingskod för ${existing.name}: ${code}`);
+    await loadScreens();
+    return;
+  }
   const pair_code = shortCode();
   const submit = event.currentTarget.querySelector('button[type="submit"]');
   submit.disabled = true;
@@ -640,7 +648,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   card.innerHTML = `
     <div class="screen-head">
       <div class="screen-title-wrap"><input class="screen-select ${canEdit ? '' : 'hidden'}" type="checkbox" ${selectedScreenIds.has(screen.id) ? 'checked' : ''} aria-label="Välj ${esc(screen.name)}" /><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · möjlig dubblett (${sameNameCount} med samma namn)` : ''}</div></div></div>
-      <div class="screen-actions">${pending}<button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
+      <div class="screen-actions">${pending}<button class="button ghost small renew-pairing ${canAdmin ? '' : 'hidden'}">Ny kod</button><button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
     </div>
     <div class="screen-status-row"><div class="screen-live-status ${isOnline(screen) ? 'online' : 'offline'}"><span class="status-indicator"></span><span class="status-label">${isOnline(screen) ? 'Online nu' : 'Offline'}</span><span class="last-seen">${screen.last_seen_at ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Spelaren har inte rapporterat ännu'}</span></div><div class="current-content ${isOnline(screen) ? '' : 'stale'}"><span class="current-content-label">VISAS JUST NU</span><strong class="current-title">${esc(isOnline(screen) ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt')}</strong><span class="current-kind">${esc(isOnline(screen) ? kindLabel(screen.current_kind) : 'Skärmen är offline')}</span><div class="current-preview"></div></div></div>
     <div class="screen-body">
@@ -669,6 +677,13 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   card.querySelector('.toggle-screen').addEventListener('click', async () => {
     const { error } = await supabase.from('screens').update({ is_active: !screen.is_active }).eq('id', screen.id);
     if (error) toast(error.message, true); else loadScreens();
+  });
+  card.querySelector('.renew-pairing').addEventListener('click', async () => {
+    if (!confirm(`Skapa en ny kod för ”${screen.name}”? Den befintliga TV:n kopplas inte bort. Använd bara detta när du återställer eller parkopplar om spelaren.`)) return;
+    const { data: code, error } = await supabase.rpc('renew_screen_pairing_code', { input_screen_id: screen.id });
+    if (error) return toast(error.message, true);
+    toast(`Ny parkopplingskod för ${screen.name}: ${code}`);
+    await loadScreens();
   });
   card.querySelector('.screen-playlist').addEventListener('change', async event => {
     const playlist_id = event.currentTarget.value || null;
