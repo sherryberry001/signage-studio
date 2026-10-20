@@ -17,14 +17,14 @@ Spelaren hämtar spellistan var 60:e sekund med cache avstängd för API-anrop. 
 2. I Supabase Auth: stäng av publik registrering och bjud in de admin-konton som ska få ändra innehåll. Lägg till GitHub Pages-adressen under **URL Configuration → Redirect URLs** när den är känd.
 3. `admin/config.js` är redan konfigurerad med projektets Project URL och anon/public key. Anon-nyckeln är avsedd att finnas i klientkod; **service-role/secret-nyckeln får aldrig läggas i appen, GitHub Pages eller Android-bygget**. Åtkomst ska begränsas med RLS-policys.
 4. Skapa ett GitHub-repo och lägg upp innehållet i den här mappen på branchen `main`. Ett publikt repo passar GitHub Pages kostnadsfria flöde; det innehåller bara källkod och den avsedda publika Supabase anon-nyckeln.
-5. I repo-inställningarna, välj **Settings → Pages → Build and deployment → GitHub Actions**. Workflowen publicerar adminvyn från `admin/`.
+5. I repo-inställningarna, välj **Settings → Pages → Build and deployment → Deploy from a branch**, sedan `main` och `/docs`. `docs/` innehåller adminvyn för GitHub Pages. Det finns också en Actions-workflow för automatisk publicering om kontot kan köra GitHub Actions.
 6. Lägg till repo-variablerna `SUPABASE_URL` och `SUPABASE_ANON_KEY` under **Settings → Secrets and variables → Actions → Variables**. Använd projektets anon/public key; de används när Android-appen byggs i GitHub Actions. Det är en publik klientnyckel och den skyddar inte data på egen hand.
 
 När Pages-workflowen är klar finns adminvyn på `https://<github-användare>.github.io/<repo>/`. Logga in med ett inbjudet admin-konto, skapa en skärm och använd den sex tecken långa parkopplingskoden i TV-appen. Koden går bara att använda en gång.
 
 ## Bygg och installera TV-appen
 
-1. Öppna repots **Actions** och kör `Build Android TV player`. Hämta artefakten `signage-player-debug-apk` från körningen.
+1. Öppna repots **Actions** och kör `Build Android TV player`. Hämta artefakten `signage-player-debug-apk` från körningen. Alternativt bygg lokalt från `player-android/` med Gradle 8.9, Android SDK 35 och en JDK 17.
 2. På Philips-TV:n behöver appen installeras en gång. Google Play kräver Google-inloggning; om du inte vill logga in kan APK:n sideloadas. Aktivera då utvecklaralternativ och USB-/nätverksfelsökning på TV:n och installera med Android Debug Bridge, eller kopiera APK:n via USB med en filhanterare.
 3. Starta **Signage Player**, skriv parkopplingskoden från adminvyn och låt appen gå i helskärm.
 
