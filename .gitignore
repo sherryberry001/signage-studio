@@ -3,3 +3,6 @@ player-android/signage.properties
 player-android/local.properties
 player-android/.gradle/
 player-android/**/build/
+
+supabase/.temp/
+player-android/.kotlin/

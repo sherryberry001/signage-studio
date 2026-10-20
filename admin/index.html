@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css" />
-    <script type="module" src="./app.js"></script>
+    <link rel="stylesheet" href="./style.css?v=20261020-team" />
+    <script type="module" src="./app.js?v=20261020-team"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -52,6 +52,11 @@
           <div><strong>Återanvändbara spellistor</strong><span>Skapa en gång och tilldela till flera skärmar.</span></div>
           <form id="createPlaylistForm"><input id="playlistName" maxlength="80" placeholder="Namn på ny spellista" required /><button class="button ghost" type="submit">＋ Skapa spellista</button></form>
         </div>
+        <section id="teamPanel" class="team-panel hidden">
+          <div class="team-heading"><div><strong>Teamåtkomst</strong><span>Bjud först in personen i Supabase Auth och tilldela sedan en roll här.</span></div></div>
+          <form id="teamRoleForm" class="team-role-form"><input id="teamEmail" type="email" placeholder="namn@foretag.se" required /><select id="teamRole"><option value="editor">Redaktör</option><option value="viewer">Läsbehörig</option><option value="admin">Admin</option></select><button class="button primary" type="submit">Tilldela roll</button></form>
+          <div id="teamList" class="team-list"></div>
+        </section>
         <div id="screenList" class="screen-list"></div>
         <div id="emptyState" class="empty-state hidden"><div class="empty-icon">▣</div><h2>Din första skärm börjar här</h2><p>Skapa en skärm, koppla TV-appen med parkopplingskoden och lägg till ditt första innehåll.</p></div>
       </section>

@@ -14,8 +14,8 @@ Spelaren hämtar spellistan och rapporterar sin status var 15:e sekund. Adminvyn
 
 ## Publicera adminvyn på GitHub Pages
 
-1. Skapa ett Supabase-projekt och kör `supabase/schema.sql` i SQL Editor. För en befintlig installation kör du migrationsfilerna i ordning: `20261020_live_screen_control.sql`, `20261020_reusable_playlists.sql` och `20261020_recurring_schedule.sql`. Spellistemigrationen skapar en återanvändbar spellista per befintlig skärm och flyttar över dess innehåll; den sista lägger till återkommande veckoscheman.
-2. I Supabase Auth: stäng av publik registrering och bjud in de admin-konton som ska få ändra innehåll. Lägg till GitHub Pages-adressen under **URL Configuration → Redirect URLs** när den är känd.
+1. Skapa ett Supabase-projekt och skapa det första Auth-kontot som ska vara administratör. Kör därefter `supabase/schema.sql` i SQL Editor. För en befintlig installation kör du migrationsfilerna i ordning: `20261020_live_screen_control.sql`, `20261020_reusable_playlists.sql`, `20261020_recurring_schedule.sql` och sist `20261020_team_permissions.sql`. Spellistemigrationen bevarar befintligt innehåll, schemaläggningsmigrationen lägger till veckoscheman och team-migrationen inför rollerna admin, editor och viewer samt ger befintliga Auth-konton adminrollen.
+2. I Supabase Auth: stäng av publik registrering och bjud in ytterligare admin-konton. Schemat ger befintliga Auth-konton adminrollen. Lägg till GitHub Pages-adressen under **URL Configuration → Redirect URLs** när den är känd.
 3. `admin/config.js` är redan konfigurerad med projektets Project URL och anon/public key. Anon-nyckeln är avsedd att finnas i klientkod; **service-role/secret-nyckeln får aldrig läggas i appen, GitHub Pages eller Android-bygget**. Åtkomst ska begränsas med RLS-policys.
 4. Skapa ett GitHub-repo och lägg upp innehållet i den här mappen på branchen `main`. Ett publikt repo passar GitHub Pages kostnadsfria flöde; det innehåller bara källkod och den avsedda publika Supabase anon-nyckeln.
 5. I repo-inställningarna, välj **Settings → Pages → Build and deployment → Deploy from a branch**, sedan `main` och `/docs`. `docs/` innehåller adminvyn för GitHub Pages. Det finns också en Actions-workflow för automatisk publicering om kontot kan köra GitHub Actions.
@@ -30,6 +30,14 @@ När Pages-workflowen är klar finns adminvyn på `https://<github-användare>.g
 3. Starta **Signage Player**, skriv parkopplingskoden från adminvyn och låt appen gå i helskärm.
 
 Om TV:n inte startar appen automatiskt efter omstart behöver den ställas in som startapp på TV:n, om firmware tillåter det. Den här första versionen installerar inte enhetsägar-/kiosk-läge och kringgår inte Androids installationsbekräftelser.
+
+## Teamroller
+
+- **Admin:** hanterar skärmar, innehåll, spellistor och teamroller.
+- **Redaktör:** hanterar innehåll och spellistor, men inte skärmtilldelning eller teamroller.
+- **Läsbehörig:** kan se skärmar och innehåll men inte ändra dem.
+
+Bjud först in personen via Supabase Auth. Administratören kan därefter tilldela rollen i Signage Studio. Rollkontrollerna skyddas av Supabase RLS och RPC:er; inloggning ensam ger inte åtkomst.
 
 ## Lägga till innehåll
 

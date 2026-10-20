@@ -10,6 +10,8 @@ const notice = $('#setupNotice');
 let currentUser = null;
 let screens = [];
 let playlists = [];
+let teamMembers = [];
+let currentRole = null;
 let statusTimer = null;
 let screensLoadId = 0;
 
@@ -49,12 +51,15 @@ function setSession(user) {
   appView.classList.toggle('hidden', !user);
   if (user) {
     $('#userEmail').textContent = user.email || 'Admin';
-    if (!sameUser) loadScreens();
+    if (!sameUser || !currentRole) loadScreens();
     clearInterval(statusTimer);
     statusTimer = setInterval(refreshScreenStatus, 5000);
   } else {
     screensLoadId++;
     screens = [];
+    playlists = [];
+    teamMembers = [];
+    currentRole = null;
     screenList.replaceChildren();
     clearInterval(statusTimer);
   }
@@ -97,6 +102,16 @@ $('#createScreenForm').addEventListener('submit', async event => {
   await loadScreens();
 });
 
+$('#teamRoleForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (currentRole !== 'admin') return;
+  const { error } = await supabase.rpc('set_team_member', { input_email: $('#teamEmail').value.trim(), input_role: $('#teamRole').value });
+  if (error) return toast(error.message, true);
+  event.currentTarget.reset();
+  toast('Teamrollen uppdaterades.');
+  await loadScreens();
+});
+
 $('#createPlaylistForm').addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -112,13 +127,32 @@ async function loadScreens() {
   if (!currentUser) return;
   const loadId = ++screensLoadId;
   const userId = currentUser.id;
-  const [{ data, error }, { data: playlistData, error: playlistError }] = await Promise.all([
+  const [
+    { data, error },
+    { data: playlistData, error: playlistError },
+    { data: memberData, error: memberError }
+  ] = await Promise.all([
     supabase.from('screens').select('*').order('created_at', { ascending: false }),
-    supabase.from('playlists').select('*').order('name', { ascending: true })
+    supabase.from('playlists').select('*').order('name', { ascending: true }),
+    supabase.from('team_members').select('user_id,email,role').order('email', { ascending: true })
   ]);
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
   if (playlistError) return toast(playlistError.message, true);
+  if (memberError) return toast(memberError.message, true);
+  teamMembers = memberData || [];
+  currentRole = teamMembers.find(member => member.user_id === userId)?.role || null;
+  updateRoleVisibility();
+  if (!currentRole) {
+    showNotice('Det här kontot saknar en teamroll. Be en administratör att tilldela åtkomst.');
+    screens = [];
+    playlists = [];
+    screenList.replaceChildren();
+    $('#emptyState').classList.add('hidden');
+    updateScreenSummary();
+    return;
+  }
+  notice.classList.add('hidden');
   const nextScreens = data || [];
   const nextPlaylists = playlistData || [];
   const slideResults = await Promise.all(nextScreens.map(screen =>
@@ -136,6 +170,38 @@ async function loadScreens() {
     return renderScreen(screen, slides || []);
   }));
   updateScreenSummary();
+  renderTeamMembers();
+}
+
+function updateRoleVisibility() {
+  const admin = currentRole === 'admin';
+  const editor = admin || currentRole === 'editor';
+  $('#createScreenForm').classList.toggle('hidden', !admin);
+  $('#createPlaylistForm').classList.toggle('hidden', !editor);
+  $('#teamPanel').classList.toggle('hidden', !admin);
+}
+
+function renderTeamMembers() {
+  const list = $('#teamList');
+  if (!list) return;
+  if (currentRole !== 'admin') { list.replaceChildren(); return; }
+  const labels = { admin: 'Admin', editor: 'Redaktör', viewer: 'Läsbehörig' };
+  list.innerHTML = teamMembers.map(member => `<div class="team-member" data-user-id="${esc(member.user_id)}"><div class="team-member-identity"><strong>${esc(member.email)}</strong><span>${labels[member.role] || esc(member.role)}</span></div><select class="member-role" aria-label="Roll för ${esc(member.email)}"><option value="editor" ${member.role === 'editor' ? 'selected' : ''}>Redaktör</option><option value="viewer" ${member.role === 'viewer' ? 'selected' : ''}>Läsbehörig</option><option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option></select><button class="button ghost small save-member">Spara</button><button class="button ghost small remove-member">Ta bort</button></div>`).join('') || '<p class="team-empty">Inga teammedlemmar ännu.</p>';
+  list.querySelectorAll('.save-member').forEach(button => button.addEventListener('click', async () => {
+    const row = button.closest('.team-member');
+    const member = teamMembers.find(item => item.user_id === row.dataset.userId);
+    const { error } = await supabase.rpc('set_team_member', { input_email: member.email, input_role: row.querySelector('.member-role').value });
+    if (error) return toast(error.message, true);
+    toast('Teamrollen uppdaterades.'); await loadScreens();
+  }));
+  list.querySelectorAll('.remove-member').forEach(button => button.addEventListener('click', async () => {
+    const row = button.closest('.team-member');
+    const member = teamMembers.find(item => item.user_id === row.dataset.userId);
+    if (!confirm(`Ta bort ${member.email} från teamet?`)) return;
+    const { error } = await supabase.rpc('remove_team_member', { input_user_id: member.user_id });
+    if (error) return toast(error.message, true);
+    toast('Teammedlemmen togs bort.'); await loadScreens();
+  }));
 }
 
 function isOnline(screen) {
@@ -227,6 +293,8 @@ function scheduleFields() {
 }
 
 function renderScreen(screen, slides) {
+  const canAdmin = currentRole === 'admin';
+  const canEdit = canAdmin || currentRole === 'editor';
   const card = document.createElement('article');
   card.className = 'screen-card';
   card.dataset.screenId = screen.id;
@@ -237,15 +305,15 @@ function renderScreen(screen, slides) {
   card.innerHTML = `
     <div class="screen-head">
       <div class="screen-title-wrap"><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${slides.length} objekt</div></div></div>
-      <div class="screen-actions">${pending}<button class="button ghost small toggle-screen">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen">Ta bort</button></div>
+      <div class="screen-actions">${pending}<button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
     </div>
     <div class="screen-status-row"><div class="screen-live-status ${isOnline(screen) ? 'online' : 'offline'}"><span class="status-indicator"></span><span class="status-label">${isOnline(screen) ? 'Online nu' : 'Offline'}</span><span class="last-seen">${screen.last_seen_at ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Spelaren har inte rapporterat ännu'}</span></div><div class="current-content ${isOnline(screen) ? '' : 'stale'}"><span class="current-content-label">VISAS JUST NU</span><strong class="current-title">${esc(isOnline(screen) ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt')}</strong><span class="current-kind">${esc(isOnline(screen) ? kindLabel(screen.current_kind) : 'Skärmen är offline')}</span><div class="current-preview"></div></div></div>
     <div class="screen-body">
       <p class="pair-help">${screen.pair_code ? 'Öppna Signage Player på TV:n och skriv koden ovan. Koden kan bara användas en gång.' : 'TV:n är parkopplad. Nytt innehåll synkas automatiskt och sparas lokalt för offlinevisning.'}</p>
-      <label class="playlist-assignment">Spellista för den här skärmen<select class="screen-playlist">${playlistOptions}</select><span>En spellista kan delas av flera skärmar.</span></label>
-      <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id ? '' : 'hidden'}">Återgå till spellistan</button></div>
-      <div class="playlist">${slides.map((slide, index) => renderSlide(slide, index, slides.length)).join('') || '<div class="slide-sub">Spellistan är tom. Lägg till ett objekt nedan.</div>'}</div>
-      <div class="slide-add-grid">
+      <label class="playlist-assignment ${canAdmin ? '' : 'hidden'}">Spellista för den här skärmen<select class="screen-playlist">${playlistOptions}</select><span>En spellista kan delas av flera skärmar.</span></label>
+      <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id && canEdit ? '' : 'hidden'}">Återgå till spellistan</button></div>
+      <div class="playlist">${slides.map((slide, index) => renderSlide(slide, index, slides.length, canEdit)).join('') || '<div class="slide-sub">Spellistan är tom. Lägg till ett objekt nedan.</div>'}</div>
+      <div class="slide-add-grid ${canEdit ? '' : 'hidden'}">
         <div class="add-box"><h3>Textmeddelande</h3><form class="text-slide-form add-text"><input name="title" maxlength="80" placeholder="Rubrik" required /><textarea name="body" maxlength="1200" placeholder="Meddelande" required></textarea><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="15" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Publicera text</button></div>${scheduleFields()}</form></div>
         <div class="add-box"><h3>Video eller JSON-feed</h3><form class="text-slide-form add-source"><select name="kind"><option value="video">Video (MP4-länk eller fil)</option><option value="feed">JSON-feed</option></select><input name="title" maxlength="80" placeholder="Namn på innehåll" required /><input name="url" type="url" placeholder="https://…" /><label class="file-label">För video kan du också välja MP4-fil <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime" /></label><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="30" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till</button></div>${scheduleFields()}</form></div>
         <div class="add-box"><h3>Klocka & datum</h3><form class="text-slide-form add-clock"><input name="title" maxlength="80" placeholder="Rubrik, till exempel Välkommen" /><input name="body" maxlength="180" placeholder="Valfri underrad" /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="20" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till klocka</button></div>${scheduleFields()}</form></div>
@@ -279,9 +347,9 @@ function renderScreen(screen, slides) {
   return card;
 }
 
-function renderSlide(slide, index, count) {
+function renderSlide(slide, index, count, canEdit) {
   const detail = slide.kind === 'text' ? (slide.body || '') : slide.kind === 'clock' ? 'Lokal tid och datum' : (slide.source_url || 'Ingen källa');
-  return `<div class="slide-row"><div class="slide-thumb">${slide.kind === 'video' ? '▶' : slide.kind === 'feed' ? '↗' : slide.kind === 'web' ? '↗' : slide.kind === 'clock' ? '◷' : 'T'}</div><div><div class="slide-title">${esc(slide.title || kindLabel(slide.kind))}</div><div class="slide-sub">${esc(kindLabel(slide.kind))} · ${slide.duration_seconds}s · ${esc(detail)}</div></div><div class="slide-buttons"><button class="button ghost small show-now" data-slide-action="show-now" data-id="${slide.id}">Visa nu</button><button class="icon-button" data-slide-action="up" data-id="${slide.id}" ${index === 0 ? 'disabled' : ''}>↑</button><button class="icon-button" data-slide-action="down" data-id="${slide.id}" ${index === count - 1 ? 'disabled' : ''}>↓</button><button class="icon-button delete" data-slide-action="delete" data-id="${slide.id}">×</button></div></div>`;
+  return `<div class="slide-row"><div class="slide-thumb">${slide.kind === 'video' ? '▶' : slide.kind === 'feed' ? '↗' : slide.kind === 'web' ? '↗' : slide.kind === 'clock' ? '◷' : 'T'}</div><div><div class="slide-title">${esc(slide.title || kindLabel(slide.kind))}</div><div class="slide-sub">${esc(kindLabel(slide.kind))} · ${slide.duration_seconds}s · ${esc(detail)}</div></div><div class="slide-buttons"><button class="button ghost small show-now" data-slide-action="show-now" data-id="${slide.id}" ${canEdit ? '' : 'hidden'}>Visa nu</button><button class="icon-button" data-slide-action="up" data-id="${slide.id}" ${canEdit ? '' : 'hidden'} ${index === 0 ? 'disabled' : ''}>↑</button><button class="icon-button" data-slide-action="down" data-id="${slide.id}" ${canEdit ? '' : 'hidden'} ${index === count - 1 ? 'disabled' : ''}>↓</button><button class="icon-button delete" data-slide-action="delete" data-id="${slide.id}" ${canEdit ? '' : 'hidden'}>×</button></div></div>`;
 }
 
 async function setForcedSlide(screen, slideId) {
