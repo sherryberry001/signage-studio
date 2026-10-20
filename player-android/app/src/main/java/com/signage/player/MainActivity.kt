@@ -258,8 +258,45 @@ class MainActivity : Activity() {
             "web" -> showWeb(item)
             else -> showText(item.optString("title"), item.optString("body"))
         }
+        applyMultiZoneLayout(item)
         advanceTask = Runnable { index = (index + 1) % slides.length(); showCurrentSlide() }
         handler.postDelayed(advanceTask!!, duration)
+    }
+
+    private fun applyMultiZoneLayout(item: JSONObject) {
+        val layout = item.optString("layout_type", "single")
+        val copy = item.optString("layout_text").trim()
+        if (layout == "single" || copy.isBlank()) return
+        val primary = root.getChildAt(0) ?: return
+        root.post {
+            if (root.childCount == 0 || root.getChildAt(0) !== primary) return@post
+            val width = root.width
+            val height = root.height
+            if (width <= 0 || height <= 0) return@post
+            val panel = TextView(this).apply {
+                text = copy
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.rgb(28, 37, 53))
+                textSize = if (layout == "side_panel") 24f else 22f
+                gravity = Gravity.CENTER
+                setPadding(28, 16, 28, 16)
+                if (layout == "bottom_ticker") {
+                    setSingleLine(true)
+                    ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
+                    marqueeRepeatLimit = -1
+                    isSelected = true
+                }
+            }
+            if (layout == "bottom_ticker") {
+                val panelHeight = (height * .16f).toInt().coerceAtLeast(80)
+                primary.layoutParams = FrameLayout.LayoutParams(-1, height - panelHeight, Gravity.TOP)
+                root.addView(panel, FrameLayout.LayoutParams(-1, panelHeight, Gravity.BOTTOM))
+            } else if (layout == "side_panel") {
+                val primaryWidth = (width * .72f).toInt()
+                primary.layoutParams = FrameLayout.LayoutParams(primaryWidth, -1, Gravity.LEFT)
+                root.addView(panel, FrameLayout.LayoutParams(width - primaryWidth, -1, Gravity.RIGHT))
+            }
+        }
     }
 
     private fun showWeb(item: JSONObject) {

@@ -344,6 +344,7 @@ function renderScreen(screen, slides, assignedChannels = []) {
     <div class="screen-body">
       <p class="pair-help">${screen.pair_code ? 'Öppna Signage Player på TV:n och skriv koden ovan. Koden kan bara användas en gång.' : 'TV:n är parkopplad. Nytt innehåll synkas automatiskt och sparas lokalt för offlinevisning.'}</p>
       <label class="playlist-assignment ${canAdmin ? '' : 'hidden'}">Spellista för den här skärmen<select class="screen-playlist">${playlistOptions}</select><span>En spellista kan delas av flera skärmar.</span></label>
+      <form class="screen-layout-form ${canAdmin ? '' : 'hidden'}"><label>Skärmlayout<select name="layout_type"><option value="single" ${screen.layout_type === 'single' ? 'selected' : ''}>En zon · fullskärm</option><option value="bottom_ticker" ${screen.layout_type === 'bottom_ticker' ? 'selected' : ''}>Huvudyta + ticker längst ned</option><option value="side_panel" ${screen.layout_type === 'side_panel' ? 'selected' : ''}>Huvudyta + sidopanel</option></select></label><label class="layout-text-label">Zontext<input name="layout_text" maxlength="500" value="${esc(screen.layout_text || '')}" placeholder="Meddelande som visas i den andra zonen" /></label><button class="button ghost small" type="submit">Spara layout</button></form>
       <section class="channel-assignment ${canEdit ? '' : 'hidden'}"><div class="channel-heading"><div><strong>Kanalschema</strong><span>Aktiv kanal prioriteras framför skärmens grundspellista. Lägre prioritetstal vinner.</span></div></div><form class="channel-schedule-form"><select name="channel_id" required>${channelOptions}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Kanalprioritet" />${scheduleFields()}<button class="button ghost small" type="submit">＋ Schemalägg kanal</button></form><div class="channel-schedule-list">${assignedChannels.map(item => { const channel = channels.find(c => c.id === item.channel_id); return `<div class="channel-schedule-row"><div><strong>${esc(channel?.name || 'Okänd kanal')}</strong><span>Prioritet ${item.priority} · ${scheduleSummary(item)}</span></div><button class="button ghost small remove-channel-schedule" data-id="${esc(item.id)}">Ta bort</button></div>`; }).join('') || '<div class="slide-sub">Inga kanaler schemalagda för den här skärmen.</div>'}</div></section>
       <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id && canEdit ? '' : 'hidden'}">Återgå till spellistan</button></div>
       <div class="playlist">${slides.map((slide, index) => renderSlide(slide, index, slides.length, canEdit)).join('') || '<div class="slide-sub">Spellistan är tom. Lägg till ett objekt nedan.</div>'}</div>
@@ -365,6 +366,17 @@ function renderScreen(screen, slides, assignedChannels = []) {
     const { error } = await supabase.from('screens').update({ playlist_id, forced_slide_id: null }).eq('id', screen.id);
     if (error) return toast(error.message, true);
     toast(playlist_id ? 'Spellistan tilldelades skärmen.' : 'Skärmen använder sin egen spellista.');
+    await loadScreens();
+  });
+  card.querySelector('.screen-layout-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const f = new FormData(event.currentTarget);
+    const layout_type = String(f.get('layout_type'));
+    const layout_text = String(f.get('layout_text') || '').trim();
+    if (layout_type !== 'single' && !layout_text) return toast('Skriv texten som ska visas i den andra zonen.', true);
+    const { error } = await supabase.from('screens').update({ layout_type, layout_text }).eq('id', screen.id);
+    if (error) return toast(error.message, true);
+    toast('Skärmlayouten sparades och synkas till TV:n.');
     await loadScreens();
   });
   card.querySelector('.channel-schedule-form').addEventListener('submit', async event => {
