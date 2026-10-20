@@ -42,15 +42,23 @@ class MainActivity : Activity() {
     private lateinit var root: FrameLayout
     private var screenId: String? = null
     private var slides = JSONArray()
+    private var zoneSlides = JSONArray()
     private var index = 0
+    private var zoneIndex = 0
     private var lastSync = ""
     private var playerVideo: VideoView? = null
     private var dashboardView: WebView? = null
+    private var zoneRoot: FrameLayout? = null
+    private var zoneVideo: VideoView? = null
+    private var zoneWebView: WebView? = null
     private var refreshTask: Runnable? = null
     private var advanceTask: Runnable? = null
     private var clockTask: Runnable? = null
     private var heartbeatTask: Runnable? = null
     private var scheduleTask: Runnable? = null
+    private var zoneAdvanceTask: Runnable? = null
+    private var zoneClockTask: Runnable? = null
+    private var zoneGeneration = 0
     private var slideGeneration = 0
     private var currentSlide: JSONObject? = null
     private var currentTitle = "Väntar på innehåll"
@@ -183,7 +191,7 @@ class MainActivity : Activity() {
                 val previous = prefs.getString("playlist", "[]") ?: "[]"
                 val changed = fresh.toString() != previous
                 prefs.edit().putString("playlist", fresh.toString()).putString("last_sync", Instant.now().toString()).apply()
-                slides = fresh
+                setPlayerPlaylist(fresh)
                 lastSync = "Synkad ${DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.now())}"
                 preloadVideos(fresh)
                 if (changed || fresh.length() == 0) handler.post {
@@ -193,13 +201,24 @@ class MainActivity : Activity() {
                 onComplete?.invoke(null)
             } catch (_: Exception) {
                 val saved = prefs.getString("playlist", "[]") ?: "[]"
-                slides = try { JSONArray(saved) } catch (_: Exception) { JSONArray() }
+                setPlayerPlaylist(try { JSONArray(saved) } catch (_: Exception) { JSONArray() })
                 val savedTime = prefs.getString("last_sync", null)
                 lastSync = savedTime?.let { "Offline · senast synkad ${formatTime(it)}" } ?: "Offline · inget innehåll sparat"
-                handler.post { if (slides.length() > 0) showCurrentSlide() else showMessage("Ingen anslutning", "När TV:n får nät igen synkas innehållet automatiskt.") }
+                handler.post { if (slides.length() > 0 || zoneSlides.length() > 0) showCurrentSlide() else showMessage("Ingen anslutning", "När TV:n får nät igen synkas innehållet automatiskt.") }
                 onComplete?.invoke("Kunde inte synka innehållet.")
             }
         }
+    }
+
+    private fun setPlayerPlaylist(items: JSONArray) {
+        val main = JSONArray()
+        val secondary = JSONArray()
+        for (i in 0 until items.length()) {
+            val item = items.optJSONObject(i) ?: continue
+            if (item.optString("layout_zone") == "secondary") secondary.put(item) else main.put(item)
+        }
+        slides = main
+        zoneSlides = secondary
     }
 
     private fun pollPlayerCommand() {
@@ -261,6 +280,7 @@ class MainActivity : Activity() {
         playerVideo?.stopPlayback()
         dashboardView?.stopLoading()
         dashboardView?.destroy()
+        clearSecondaryZone()
         playerVideo = null
         root.removeAllViews()
         if (slides.length() == 0) {
@@ -271,6 +291,7 @@ class MainActivity : Activity() {
             currentSourceUrl = null
             reportHeartbeat(null, "Klocka & datum", "", "clock", null)
             showIdle()
+            applyMultiZoneLayout(zoneSlides.optJSONObject(0))
             return
         }
         val eligible = eligibleSlides()
@@ -282,6 +303,7 @@ class MainActivity : Activity() {
             currentSourceUrl = null
             reportHeartbeat(null, "Inget publicerat just nu", "", null, null)
             showMessage("Inget publicerat just nu", "Nästa synk sker automatiskt.")
+            applyMultiZoneLayout(zoneSlides.optJSONObject(0))
             advanceTask = Runnable { index = (index + 1) % slides.length(); showCurrentSlide() }
             handler.postDelayed(advanceTask!!, 30_000)
             return
@@ -310,30 +332,21 @@ class MainActivity : Activity() {
         handler.postDelayed(advanceTask!!, duration)
     }
 
-    private fun applyMultiZoneLayout(item: JSONObject) {
-        val layout = item.optString("layout_type", "single")
-        val copy = item.optString("layout_text").trim()
-        if (layout == "single" || copy.isBlank()) return
+    private fun applyMultiZoneLayout(item: JSONObject?) {
+        clearSecondaryZone()
+        val layoutItem = item ?: zoneSlides.optJSONObject(0)
+        val layout = layoutItem?.optString("layout_type", "single") ?: "single"
+        val copy = layoutItem?.optString("layout_text").orEmpty().trim()
+        if (layout == "single" || item?.optBoolean("forced") == true) return
+        val scheduled = eligibleZoneSlides()
+        if (scheduled.isEmpty() && copy.isBlank()) return
         val primary = root.getChildAt(0) ?: return
         root.post {
             if (root.childCount == 0 || root.getChildAt(0) !== primary) return@post
             val width = root.width
             val height = root.height
             if (width <= 0 || height <= 0) return@post
-            val panel = TextView(this).apply {
-                text = copy
-                setTextColor(Color.WHITE)
-                setBackgroundColor(Color.rgb(28, 37, 53))
-                textSize = if (layout == "side_panel") 24f else 22f
-                gravity = Gravity.CENTER
-                setPadding(28, 16, 28, 16)
-                if (layout == "bottom_ticker") {
-                    setSingleLine(true)
-                    ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
-                    marqueeRepeatLimit = -1
-                    isSelected = true
-                }
-            }
+            val panel = FrameLayout(this).apply { setBackgroundColor(Color.rgb(28, 37, 53)) }
             if (layout == "bottom_ticker") {
                 val panelHeight = (height * .16f).toInt().coerceAtLeast(80)
                 primary.layoutParams = FrameLayout.LayoutParams(-1, height - panelHeight, Gravity.TOP)
@@ -343,7 +356,141 @@ class MainActivity : Activity() {
                 primary.layoutParams = FrameLayout.LayoutParams(primaryWidth, -1, Gravity.LEFT)
                 root.addView(panel, FrameLayout.LayoutParams(width - primaryWidth, -1, Gravity.RIGHT))
             }
+            zoneRoot = panel
+            if (scheduled.isEmpty()) showSecondaryZoneText(panel, copy, layout)
+            else showSecondaryZoneSlide(panel, scheduled[zoneIndex.mod(scheduled.size)], layout)
         }
+    }
+
+    private fun clearSecondaryZone() {
+        zoneGeneration++
+        zoneAdvanceTask?.let(handler::removeCallbacks)
+        zoneClockTask?.let(handler::removeCallbacks)
+        zoneVideo?.stopPlayback()
+        zoneWebView?.stopLoading()
+        zoneWebView?.destroy()
+        zoneRoot = null
+        zoneVideo = null
+        zoneWebView = null
+    }
+
+    private fun eligibleZoneSlides(): List<JSONObject> =
+        (0 until zoneSlides.length()).mapNotNull { zoneSlides.optJSONObject(it) }.filter { isScheduled(it) }
+
+    private fun showSecondaryZoneText(container: FrameLayout, text: String, layout: String) {
+        val view = TextView(this).apply {
+            this.text = text
+            setTextColor(Color.WHITE)
+            textSize = if (layout == "side_panel") 22f else 21f
+            gravity = Gravity.CENTER
+            setPadding(22, 12, 22, 12)
+            if (layout == "bottom_ticker") {
+                setSingleLine(true)
+                ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
+                marqueeRepeatLimit = -1
+                isSelected = true
+            }
+        }
+        container.removeAllViews()
+        container.addView(view, FrameLayout.LayoutParams(-1, -1))
+    }
+
+    private fun showSecondaryZoneSlide(container: FrameLayout, item: JSONObject, layout: String) {
+        container.removeAllViews()
+        val generation = zoneGeneration
+        val kind = item.optString("kind")
+        val title = item.optString("title").ifBlank { kind }
+        when (kind) {
+            "video" -> {
+                val source = item.optString("source_url")
+                val local = runCatching { localMedia(source, download = false) }.getOrNull()
+                val video = VideoView(this).apply {
+                    setBackgroundColor(Color.BLACK)
+                    setVideoURI(if (local?.exists() == true) Uri.fromFile(local) else Uri.parse(source))
+                    setOnPreparedListener { media -> media.isLooping = true; media.setVolume(0f, 0f); start() }
+                    setOnErrorListener { _, _, _ -> showSecondaryZoneText(container, title, layout); true }
+                }
+                zoneVideo = video
+                container.addView(video, FrameLayout.LayoutParams(-1, -1))
+            }
+            "web" -> {
+                val address = item.optString("source_url")
+                if (!address.startsWith("https://") && !address.startsWith("http://")) {
+                    showSecondaryZoneText(container, "Ogiltig webbadress", layout)
+                } else {
+                    val web = WebView(this).apply {
+                        setBackgroundColor(Color.BLACK)
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.cacheMode = WebSettings.LOAD_NO_CACHE
+                        settings.mediaPlaybackRequiresUserGesture = false
+                        clearCache(true)
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(view: WebView, url: String) = !url.startsWith("https://") && !url.startsWith("http://")
+                        }
+                        webChromeClient = WebChromeClient()
+                    }
+                    zoneWebView = web
+                    container.addView(web, FrameLayout.LayoutParams(-1, -1))
+                    web.loadUrl(address)
+                }
+            }
+            "feed" -> {
+                showSecondaryZoneText(container, "Hämtar ${title} …", layout)
+                worker.execute {
+                    val source = item.optString("source_url")
+                    val cachedKey = "zone_feed_${sha256(source)}"
+                    val raw = try {
+                        val token = Uri.parse(source).fragment?.removePrefix("token=")?.takeIf { it.isNotBlank() }
+                        val connection = URL(source.substringBefore('#')).openConnection().apply {
+                            connectTimeout = 8_000
+                            readTimeout = 8_000
+                            setRequestProperty("Cache-Control", "no-cache, no-store, max-age=0")
+                            if (token != null) setRequestProperty("x-pulse-display-token", token)
+                        }
+                        connection.getInputStream().bufferedReader().use { it.readText() }.also { prefs.edit().putString(cachedKey, it).apply() }
+                    } catch (_: Exception) { prefs.getString(cachedKey, null) }
+                    handler.post {
+                        if (generation == zoneGeneration && zoneRoot === container) {
+                            val payload = raw?.let { runCatching { JSONObject(it) }.getOrNull() }
+                            val text = if (payload?.optString("format") == "dizparc-pulse-signage") {
+                                val global = payload.optJSONObject("global") ?: JSONObject()
+                                "Pulse · ${global.optString("devices_online", "0")}/${global.optString("total_devices", "0")} online · ${global.optString("critical_alerts", "0")} kritiska larm"
+                            } else raw?.let(::renderFeed) ?: "Ingen anslutning till feed"
+                            showSecondaryZoneText(container, text, layout)
+                        }
+                    }
+                }
+            }
+            "clock" -> {
+                val view = TextView(this).apply { setTextColor(Color.WHITE); textSize = 25f; gravity = Gravity.CENTER }
+                container.addView(view, FrameLayout.LayoutParams(-1, -1))
+                val tick = object : Runnable {
+                    override fun run() {
+                        val now = java.time.ZonedDateTime.now()
+                        view.text = "${now.format(DateTimeFormatter.ofPattern("HH:mm"))}\n${item.optString("title")}"
+                        handler.postDelayed(this, 1000)
+                    }
+                }
+                zoneClockTask = tick
+                handler.post(tick)
+            }
+            else -> showSecondaryZoneText(container, item.optString("body").ifBlank { title }, layout)
+        }
+
+        val schedule = object : Runnable {
+            override fun run() {
+                val available = eligibleZoneSlides()
+                if (available.isNotEmpty() && zoneRoot === container) {
+                    zoneIndex = (zoneIndex + 1) % available.size
+                    showSecondaryZoneSlide(container, available[zoneIndex], layout)
+                } else if (zoneRoot === container) {
+                    showSecondaryZoneText(container, item.optString("layout_text"), layout)
+                }
+            }
+        }
+        zoneAdvanceTask = schedule
+        handler.postDelayed(schedule, item.optInt("duration_seconds", 15).coerceIn(5, 600) * 1000L)
     }
 
     private fun showWeb(item: JSONObject) {

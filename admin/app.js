@@ -290,14 +290,37 @@ async function loadScreens() {
     const key = String(screen.name || '').trim().toLocaleLowerCase('sv-SE');
     duplicateNames.set(key, (duplicateNames.get(key) || 0) + 1);
   });
-  screenList.replaceChildren(...screens.map((screen, index) => {
+  const cards = screens.map((screen, index) => {
     const { data: slides, error: slideError } = slideResults[index];
     if (slideError) toast(slideError.message, true);
     const screenChannelIds = new Set(channelSchedules.filter(item => item.screen_id === screen.id).map(item => item.channel_id));
     const screenChannelPlaylistIds = new Set(channelPlaylists.filter(item => screenChannelIds.has(item.channel_id)).map(item => item.playlist_id));
     const screenChannelSlides = (channelSlideData || []).filter(item => screenChannelPlaylistIds.has(item.playlist_id));
     return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(String(screen.name || '').trim().toLocaleLowerCase('sv-SE')) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides);
-  }));
+  });
+  const grouped = new Map();
+  screens.forEach((screen, index) => {
+    const key = String(screen.name || '').trim().toLocaleLowerCase('sv-SE') || `screen-${screen.id}`;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push({ screen, card: cards[index] });
+  });
+  const rows = [];
+  for (const entries of grouped.values()) {
+    if (entries.length === 1) { rows.push(entries[0].card); continue; }
+    // Keep the live/paired device as the main card; retain all other records in a collapsed group.
+    entries.sort((a, b) => Number(isOnline(b.screen)) - Number(isOnline(a.screen))
+      || Number(Boolean(a.screen.pair_code)) - Number(Boolean(b.screen.pair_code))
+      || Number(Boolean(b.screen.activated_at)) - Number(Boolean(a.screen.activated_at))
+      || new Date(b.screen.created_at || 0) - new Date(a.screen.created_at || 0));
+    rows.push(entries[0].card);
+    const duplicates = document.createElement('details');
+    duplicates.className = 'duplicate-screen-group';
+    duplicates.innerHTML = `<summary>Fler skärmprofiler för ”${esc(entries[0].screen.name || 'Skärm')}” <span>${entries.length - 1}</span></summary><div class="duplicate-screen-items"></div>`;
+    const items = duplicates.querySelector('.duplicate-screen-items');
+    entries.slice(1).forEach(entry => items.append(entry.card));
+    rows.push(duplicates);
+  }
+  screenList.replaceChildren(...rows);
   selectedScreenIds.forEach(id => { if (!screens.some(screen => screen.id === id)) selectedScreenIds.delete(id); });
   $('#selectVisibleScreens').classList.toggle('hidden', !['admin', 'editor'].includes(currentRole));
   applyScreenFilters();
@@ -424,7 +447,7 @@ function updateScreenSummary() {
 $('#screenSearch').addEventListener('input', applyScreenFilters);
 $('#screenFilter').addEventListener('change', applyScreenFilters);
 $('#selectVisibleScreens').addEventListener('click', () => {
-  const visibleCards = [...screenList.querySelectorAll('.screen-card:not(.hidden)')];
+  const visibleCards = [...screenList.querySelectorAll('.screen-card:not(.hidden)')].filter(isCardVisible);
   const allSelected = visibleCards.length > 0 && visibleCards.every(card => selectedScreenIds.has(card.dataset.screenId));
   visibleCards.forEach(card => {
     if (allSelected) selectedScreenIds.delete(card.dataset.screenId);
@@ -458,8 +481,17 @@ function applyScreenFilters() {
     card.classList.toggle('hidden', !show);
     if (show) visible.push(card);
   });
+  screenList.querySelectorAll('.duplicate-screen-group').forEach(group => {
+    group.classList.toggle('hidden', !group.querySelector('.screen-card:not(.hidden)'));
+  });
   $('#visibleScreenCount').textContent = `${visible.length} visade`;
   updateBulkScreenActions();
+}
+
+function isCardVisible(card) {
+  if (card.classList.contains('hidden')) return false;
+  const group = card.closest('.duplicate-screen-group');
+  return !group || group.open;
 }
 
 function updateBulkScreenActions() {
@@ -468,7 +500,7 @@ function updateBulkScreenActions() {
   if (!actions) return;
   actions.classList.toggle('hidden', !canOperate || selectedScreenIds.size === 0);
   $('#selectedScreenCount').textContent = `${selectedScreenIds.size} valda`;
-  const visibleCards = [...screenList.querySelectorAll('.screen-card:not(.hidden)')];
+  const visibleCards = [...screenList.querySelectorAll('.screen-card:not(.hidden)')].filter(isCardVisible);
   const allVisibleSelected = visibleCards.length > 0 && visibleCards.every(card => selectedScreenIds.has(card.dataset.screenId));
   $('#selectVisibleScreens').textContent = allVisibleSelected ? 'Avmarkera synliga' : 'Välj synliga';
 }
@@ -614,7 +646,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     <div class="screen-body">
       <p class="pair-help">${screen.pair_code ? 'Öppna Signage Player på TV:n och skriv koden ovan. Koden kan bara användas en gång.' : 'TV:n är parkopplad. Nytt innehåll synkas automatiskt och sparas lokalt för offlinevisning.'}</p>
       <label class="playlist-assignment ${canAdmin ? '' : 'hidden'}">Spellista för den här skärmen<select class="screen-playlist">${playlistOptions}</select><span>En spellista kan delas av flera skärmar.</span></label>
-      <form class="screen-layout-form ${canAdmin ? '' : 'hidden'}"><label>Skärmlayout<select name="layout_type"><option value="single" ${screen.layout_type === 'single' ? 'selected' : ''}>En zon · fullskärm</option><option value="bottom_ticker" ${screen.layout_type === 'bottom_ticker' ? 'selected' : ''}>Huvudyta + ticker längst ned</option><option value="side_panel" ${screen.layout_type === 'side_panel' ? 'selected' : ''}>Huvudyta + sidopanel</option></select></label><label class="layout-text-label">Zontext<input name="layout_text" maxlength="500" value="${esc(screen.layout_text || '')}" placeholder="Meddelande som visas i den andra zonen" /></label><button class="button ghost small" type="submit">Spara layout</button></form>
+      <form class="screen-layout-form ${canAdmin ? '' : 'hidden'}"><label>Skärmlayout<select name="layout_type"><option value="single" ${screen.layout_type === 'single' ? 'selected' : ''}>En zon · fullskärm</option><option value="bottom_ticker" ${screen.layout_type === 'bottom_ticker' ? 'selected' : ''}>Huvudyta + ticker längst ned</option><option value="side_panel" ${screen.layout_type === 'side_panel' ? 'selected' : ''}>Huvudyta + sidopanel</option></select></label><label>Spellista i zon 2<select name="zone_playlist_id"><option value="">Visa zontext</option>${playlists.map(playlist => `<option value="${esc(playlist.id)}" ${playlist.id === screen.zone_playlist_id ? 'selected' : ''}>${esc(playlist.name)}</option>`).join('')}</select></label><label class="layout-text-label">Zontext<input name="layout_text" maxlength="500" value="${esc(screen.layout_text || '')}" placeholder="Visas om zonspellistan saknar aktivt innehåll" /></label><button class="button ghost small" type="submit">Spara layout</button></form>
       <section class="channel-assignment ${canEdit ? '' : 'hidden'}"><div class="channel-heading"><div><strong>Kanalschema</strong><span>Aktiv kanal prioriteras framför skärmens grundspellista. Lägre prioritetstal vinner.</span></div></div><form class="channel-schedule-form"><select name="channel_id" required>${channelOptions}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Kanalprioritet" />${scheduleFields()}<button class="button ghost small" type="submit">＋ Schemalägg kanal</button></form><div class="channel-schedule-list">${assignedChannels.map(item => { const channel = channels.find(c => c.id === item.channel_id); return `<div class="channel-schedule-row"><div><strong>${esc(channel?.name || 'Okänd kanal')}</strong><span>Prioritet ${item.priority} · ${scheduleSummary(item)}</span></div><button class="button ghost small remove-channel-schedule" data-id="${esc(item.id)}">Ta bort</button></div>`; }).join('') || '<div class="slide-sub">Inga kanaler schemalagda för den här skärmen.</div>'}</div></section>
       <div class="player-operations ${canEdit ? '' : 'hidden'}"><div><strong>Fjärråtgärder</strong><span class="player-command-status" data-command-status>${esc(formatCommandStatus(latestCommand))}</span></div><div class="player-operation-buttons"><button class="button ghost small" data-player-command="sync_now">Synka nu</button><button class="button ghost small" data-player-command="restart_player">Starta om spelaren</button></div></div>
       <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id && canEdit ? '' : 'hidden'}">Återgå till spellistan</button></div>
@@ -650,10 +682,11 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     const f = new FormData(event.currentTarget);
     const layout_type = String(f.get('layout_type'));
     const layout_text = String(f.get('layout_text') || '').trim();
-    if (layout_type !== 'single' && !layout_text) return toast('Skriv texten som ska visas i den andra zonen.', true);
-    const { error } = await supabase.from('screens').update({ layout_type, layout_text }).eq('id', screen.id);
+    const zone_playlist_id = String(f.get('zone_playlist_id') || '') || null;
+    if (layout_type !== 'single' && !layout_text && !zone_playlist_id) return toast('Välj en zonspellista eller skriv zontext.', true);
+    const { error } = await supabase.from('screens').update({ layout_type, layout_text, zone_playlist_id }).eq('id', screen.id);
     if (error) return toast(error.message, true);
-    toast('Skärmlayouten sparades och synkas till TV:n.');
+    toast('Skärmlayouten och zonspellistan sparades och synkas till TV:n.');
     await loadScreens();
   });
   card.querySelector('.channel-schedule-form').addEventListener('submit', async event => {
