@@ -186,7 +186,8 @@ class MainActivity : Activity() {
                 val currentId = current?.optString("id")
                 val currentChannel = current?.optString("channel_id")?.takeUnless { it.isBlank() || it == "null" }
                 val desiredChannel = desired.firstOrNull()?.optString("channel_id")?.takeUnless { it.isBlank() || it == "null" }
-                if (current == null || currentId.isNullOrBlank() || currentId !in desired.map { it.optString("id") } || currentChannel != desiredChannel) showCurrentSlide()
+                val synchronizedItem = if (isSynchronizedPlayback()) synchronizedSelection(desired)?.first else null
+                if (current == null || currentId.isNullOrBlank() || currentId !in desired.map { it.optString("id") } || currentChannel != desiredChannel || synchronizedItem?.optString("id")?.let { it != currentId } == true) showCurrentSlide()
                 handler.postDelayed(this, 15_000)
             }
         }
@@ -207,6 +208,7 @@ class MainActivity : Activity() {
                 val fresh = JSONArray(result)
                 val previous = prefs.getString("playlist", "[]") ?: "[]"
                 val changed = fresh.toString() != previous
+                val configChanged = freshConfig != null && freshConfig.toString() != screenConfig.toString()
                 prefs.edit().putString("playlist", fresh.toString()).putString("last_sync", Instant.now().toString()).apply()
                 setPlayerPlaylist(fresh)
                 lastSync = "Synkad ${DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.now())}"
@@ -219,7 +221,7 @@ class MainActivity : Activity() {
                     outsideOperatingHours = !isWithinOperatingHours(screenConfig)
                     if (outsideOperatingHours) {
                         if (!wasClosed || changed) showOperatingHoursScreen()
-                    } else if (changed || wasClosed || fresh.length() == 0) {
+                    } else if (changed || configChanged || wasClosed || fresh.length() == 0) {
                         if (changed) index = 0
                         showCurrentSlide()
                     }
@@ -344,7 +346,8 @@ class MainActivity : Activity() {
             return
         }
         val eligibleIds = eligible.map { it.optString("id") }.toSet()
-        val item = (0 until slides.length()).map { (index + it) % slides.length() }
+        val timedSelection = if (isSynchronizedPlayback()) synchronizedSelection(eligible) else null
+        val item = timedSelection?.first ?: (0 until slides.length()).map { (index + it) % slides.length() }
             .mapNotNull { slides.optJSONObject(it) }
             .firstOrNull { it.optString("id") in eligibleIds } ?: eligible[0]
         index = (0 until slides.length()).firstOrNull { slides.optJSONObject(it)?.optString("id") == item.optString("id") } ?: 0
@@ -354,7 +357,7 @@ class MainActivity : Activity() {
         currentKind = item.optString("kind").takeIf { it.isNotBlank() }
         currentSourceUrl = item.optString("source_url").takeIf { it.isNotBlank() }
         reportHeartbeat(item)
-        val duration = item.optInt("duration_seconds", 15).coerceIn(5, 600) * 1000L
+        val duration = timedSelection?.second ?: item.optInt("duration_seconds", 15).coerceIn(5, 600) * 1000L
         when (item.optString("kind")) {
             "video" -> showVideo(item)
             "clock" -> showClock(item)
@@ -393,7 +396,12 @@ class MainActivity : Activity() {
             }
             zoneRoot = panel
             if (scheduled.isEmpty()) showSecondaryZoneText(panel, copy, layout)
-            else showSecondaryZoneSlide(panel, scheduled[zoneIndex.mod(scheduled.size)], layout)
+            else {
+                val timedSelection = if (isSynchronizedPlayback()) synchronizedSelection(scheduled) else null
+                val selected = timedSelection?.first ?: scheduled[zoneIndex.mod(scheduled.size)]
+                zoneIndex = scheduled.indexOfFirst { it.optString("id") == selected.optString("id") }.coerceAtLeast(0)
+                showSecondaryZoneSlide(panel, selected, layout, timedSelection?.second)
+            }
         }
     }
 
@@ -430,7 +438,7 @@ class MainActivity : Activity() {
         container.addView(view, FrameLayout.LayoutParams(-1, -1))
     }
 
-    private fun showSecondaryZoneSlide(container: FrameLayout, item: JSONObject, layout: String) {
+    private fun showSecondaryZoneSlide(container: FrameLayout, item: JSONObject, layout: String, delayOverrideMillis: Long? = null) {
         container.removeAllViews()
         val generation = zoneGeneration
         val kind = item.optString("kind")
@@ -517,15 +525,21 @@ class MainActivity : Activity() {
             override fun run() {
                 val available = eligibleZoneSlides()
                 if (available.isNotEmpty() && zoneRoot === container) {
-                    zoneIndex = (zoneIndex + 1) % available.size
-                    showSecondaryZoneSlide(container, available[zoneIndex], layout)
+                    val timedSelection = if (isSynchronizedPlayback()) synchronizedSelection(available) else null
+                    if (timedSelection != null) {
+                        zoneIndex = available.indexOfFirst { it.optString("id") == timedSelection.first.optString("id") }.coerceAtLeast(0)
+                        showSecondaryZoneSlide(container, timedSelection.first, layout, timedSelection.second)
+                    } else {
+                        zoneIndex = (zoneIndex + 1) % available.size
+                        showSecondaryZoneSlide(container, available[zoneIndex], layout)
+                    }
                 } else if (zoneRoot === container) {
                     showSecondaryZoneText(container, item.optString("layout_text"), layout)
                 }
             }
         }
         zoneAdvanceTask = schedule
-        handler.postDelayed(schedule, item.optInt("duration_seconds", 15).coerceIn(5, 600) * 1000L)
+        handler.postDelayed(schedule, delayOverrideMillis ?: item.optInt("duration_seconds", 15).coerceIn(5, 600) * 1000L)
     }
 
     private fun showWeb(item: JSONObject) {
@@ -583,6 +597,23 @@ class MainActivity : Activity() {
 
     private fun isScheduled(item: JSONObject): Boolean {
         return isScheduled(item, "active_from", "active_until", "weekdays", "daily_start_time", "daily_end_time")
+    }
+
+    private fun isSynchronizedPlayback(): Boolean = screenConfig.optString("playback_mode") == "sync"
+
+    /** Derive the same cyclic item and next boundary on every player using the wall clock. */
+    private fun synchronizedSelection(items: List<JSONObject>): Pair<JSONObject, Long>? {
+        if (items.isEmpty()) return null
+        val durations = items.map { it.optInt("duration_seconds", 15).coerceIn(5, 600) * 1000L }
+        val cycleMillis = durations.sum()
+        if (cycleMillis <= 0L) return items.first() to 15_000L
+        var offset = Math.floorMod(System.currentTimeMillis(), cycleMillis)
+        items.forEachIndexed { itemIndex, item ->
+            val duration = durations[itemIndex]
+            if (offset < duration) return item to (duration - offset).coerceAtLeast(250L)
+            offset -= duration
+        }
+        return items.last() to durations.last()
     }
 
     private fun isWithinOperatingHours(config: JSONObject): Boolean {
