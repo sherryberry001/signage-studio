@@ -14,6 +14,7 @@ let channels = [];
 let channelSchedules = [];
 let teamMembers = [];
 let screenCommands = [];
+let mediaLibrary = [];
 let currentRole = null;
 let statusTimer = null;
 let screensLoadId = 0;
@@ -66,6 +67,7 @@ function setSession(user) {
     channelSchedules = [];
     teamMembers = [];
     screenCommands = [];
+    mediaLibrary = [];
     selectedScreenIds.clear();
     currentRole = null;
     screenList.replaceChildren();
@@ -151,6 +153,35 @@ $('#createChannelForm').addEventListener('submit', async event => {
   await loadScreens();
 });
 
+$('#mediaSearch').addEventListener('input', renderMediaLibrary);
+
+$('#mediaLibraryForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!['admin', 'editor'].includes(currentRole)) return;
+  const form = event.currentTarget;
+  const values = new FormData(form);
+  const kind = String(values.get('kind'));
+  let source_url = String(values.get('source_url') || '').trim();
+  const file = values.get('file');
+  if (file instanceof File && file.size > 0) {
+    if (kind !== 'video') return toast('Filer i biblioteket stöds just nu för video.', true);
+    if (file.size > 400 * 1024 * 1024) return toast('Videofilen får vara högst 400 MB.', true);
+    const path = `library/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const { error: uploadError } = await supabase.storage.from('signage-assets').upload(path, file, { cacheControl: '0', upsert: false });
+    if (uploadError) return toast(uploadError.message, true);
+    source_url = supabase.storage.from('signage-assets').getPublicUrl(path).data.publicUrl;
+  }
+  const body = String(values.get('body') || '').trim();
+  if (['web', 'feed', 'video'].includes(kind) && !/^https?:\/\//i.test(source_url)) return toast('Ange en giltig HTTP- eller HTTPS-källa.', true);
+  if (kind === 'text' && !body) return toast('Skriv texten som ska sparas i biblioteket.', true);
+  const tags = [...new Set(String(values.get('tags') || '').split(',').map(tag => tag.trim().toLocaleLowerCase('sv-SE')).filter(Boolean))];
+  const { error } = await supabase.from('media_library').insert({ kind, title: String(values.get('title') || '').trim(), body, source_url: source_url || null, tags });
+  if (error) return toast(error.message, true);
+  form.reset();
+  toast('Innehållet sparades i biblioteket.');
+  await loadScreens();
+});
+
 async function loadScreens() {
   if (!currentUser) return;
   const loadId = ++screensLoadId;
@@ -161,14 +192,16 @@ async function loadScreens() {
     { data: memberData, error: memberError },
     { data: channelData, error: channelError },
     { data: channelScheduleData, error: channelScheduleError },
-    { data: commandData, error: commandError }
+    { data: commandData, error: commandError },
+    { data: mediaData, error: mediaError }
   ] = await Promise.all([
     supabase.from('screens').select('*').order('created_at', { ascending: false }),
     supabase.from('playlists').select('*').order('name', { ascending: true }),
     supabase.from('team_members').select('user_id,email,role').order('email', { ascending: true }),
     supabase.from('channels').select('*').order('name', { ascending: true }),
     supabase.from('screen_channel_schedules').select('*').order('priority', { ascending: true }),
-    supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100)
+    supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100),
+    supabase.from('media_library').select('*').order('updated_at', { ascending: false }).limit(300)
   ]);
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
@@ -177,6 +210,7 @@ async function loadScreens() {
   if (channelError) return toast(channelError.message, true);
   if (channelScheduleError) return toast(channelScheduleError.message, true);
   if (commandError) return toast(commandError.message, true);
+  if (mediaError && mediaError.code !== '42P01') return toast(mediaError.message, true);
   teamMembers = memberData || [];
   currentRole = teamMembers.find(member => member.user_id === userId)?.role || null;
   updateRoleVisibility();
@@ -204,7 +238,9 @@ async function loadScreens() {
   channels = nextChannels;
   channelSchedules = channelScheduleData || [];
   screenCommands = commandData || [];
+  mediaLibrary = mediaData || [];
   updateChannelControls();
+  renderMediaLibrary();
   $('#emptyState').classList.toggle('hidden', screens.length > 0);
   const duplicateNames = new Map();
   screens.forEach(screen => {
@@ -231,12 +267,48 @@ function updateRoleVisibility() {
   $('#createPlaylistForm').classList.toggle('hidden', !editor);
   $('#createChannelForm').classList.toggle('hidden', !editor);
   $('.channel-library-bar').classList.toggle('hidden', !editor);
+  $('#mediaLibraryPanel').classList.toggle('hidden', !currentRole);
+  $('#mediaLibraryForm').classList.toggle('hidden', !editor);
   $('#teamPanel').classList.toggle('hidden', !admin);
 }
 
 function updateChannelControls() {
   const select = $('#channelPlaylist');
   if (select) select.innerHTML = `<option value="">Välj spellista</option>${playlists.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('')}`;
+}
+
+function renderMediaLibrary() {
+  const list = $('#mediaLibraryList');
+  if (!list) return;
+  const query = ($('#mediaSearch')?.value || '').trim().toLocaleLowerCase('sv-SE');
+  const results = mediaLibrary.filter(item => !query || `${item.title} ${(item.tags || []).join(' ')} ${item.kind}`.toLocaleLowerCase('sv-SE').includes(query));
+  const options = `<option value="">Välj spellista</option>${playlists.map(playlist => `<option value="${esc(playlist.id)}">${esc(playlist.name)}</option>`).join('')}`;
+  list.replaceChildren(...results.map(item => {
+    const row = document.createElement('article');
+    row.className = 'media-library-row';
+    row.innerHTML = `<div class="media-library-detail"><strong>${esc(item.title)}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s ${item.tags?.length ? `· ${item.tags.map(tag => `#${esc(tag)}`).join(' ')}` : ''}</span><small>${esc(item.source_url || item.body || '')}</small></div><div class="media-library-actions"><select aria-label="Välj spellista för ${esc(item.title)}" data-library-playlist>${options}</select><button class="button ghost small" type="button" data-library-add="${esc(item.id)}" ${['admin','editor'].includes(currentRole) ? '' : 'disabled'}>Lägg till</button><button class="icon-button delete" type="button" aria-label="Ta bort ${esc(item.title)}" data-library-delete="${esc(item.id)}" ${currentRole === 'admin' || currentRole === 'editor' ? '' : 'hidden'}>×</button></div>`;
+    return row;
+  }));
+  if (!results.length) list.innerHTML = '<div class="slide-sub">Inget innehåll matchar sökningen.</div>';
+  list.querySelectorAll('[data-library-add]').forEach(button => button.addEventListener('click', async () => {
+    const row = button.closest('.media-library-row');
+    const playlist_id = row.querySelector('[data-library-playlist]').value;
+    if (!playlist_id) return toast('Välj en spellista först.', true);
+    const asset = mediaLibrary.find(item => item.id === button.dataset.libraryAdd);
+    const { data: last, error: orderError } = await supabase.from('slides').select('sort_order').eq('playlist_id', playlist_id).order('sort_order', { ascending: false }).limit(1).maybeSingle();
+    if (orderError) return toast(orderError.message, true);
+    const { error } = await supabase.from('slides').insert({ playlist_id, screen_id: null, kind: asset.kind, title: asset.title, body: asset.body, source_url: asset.source_url, duration_seconds: asset.duration_seconds, sort_order: (last?.sort_order ?? -1) + 1, is_active: true });
+    if (error) return toast(error.message, true);
+    toast(`“${asset.title}” lades till i spellistan.`);
+    await loadScreens();
+  }));
+  list.querySelectorAll('[data-library-delete]').forEach(button => button.addEventListener('click', async () => {
+    const asset = mediaLibrary.find(item => item.id === button.dataset.libraryDelete);
+    if (!asset || !confirm(`Ta bort “${asset.title}” från biblioteket? Innehåll som redan kopierats till spellistor påverkas inte.`)) return;
+    const { error } = await supabase.from('media_library').delete().eq('id', asset.id);
+    if (error) return toast(error.message, true);
+    await loadScreens();
+  }));
 }
 
 function renderTeamMembers() {
