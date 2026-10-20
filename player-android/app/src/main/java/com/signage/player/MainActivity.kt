@@ -11,6 +11,11 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
+import android.webkit.CookieManager
+import android.webkit.WebChromeClient
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -38,10 +43,17 @@ class MainActivity : Activity() {
     private var index = 0
     private var lastSync = ""
     private var playerVideo: VideoView? = null
+    private var dashboardView: WebView? = null
     private var refreshTask: Runnable? = null
     private var advanceTask: Runnable? = null
     private var clockTask: Runnable? = null
+    private var heartbeatTask: Runnable? = null
     private var slideGeneration = 0
+    private var currentSlide: JSONObject? = null
+    private var currentTitle = "Väntar på innehåll"
+    private var currentBody = ""
+    private var currentKind: String? = null
+    private var currentSourceUrl: String? = null
     private val mediaDir by lazy { File(filesDir, "media").apply { mkdirs() } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -128,10 +140,18 @@ class MainActivity : Activity() {
         refreshTask = object : Runnable {
             override fun run() {
                 syncPlaylist()
-                handler.postDelayed(this, 60_000)
+                handler.postDelayed(this, 15_000)
             }
         }
-        handler.postDelayed(refreshTask!!, 60_000)
+        handler.postDelayed(refreshTask!!, 15_000)
+        heartbeatTask?.let(handler::removeCallbacks)
+        heartbeatTask = object : Runnable {
+            override fun run() {
+                reportHeartbeat(currentSlide, currentTitle, currentBody, currentKind, currentSourceUrl)
+                handler.postDelayed(this, 15_000)
+            }
+        }
+        handler.postDelayed(heartbeatTask!!, 15_000)
     }
 
     private fun syncPlaylist() {
@@ -177,15 +197,29 @@ class MainActivity : Activity() {
         advanceTask?.let(handler::removeCallbacks)
         clockTask?.let(handler::removeCallbacks)
         playerVideo?.stopPlayback()
+        dashboardView?.stopLoading()
+        dashboardView?.destroy()
         playerVideo = null
         root.removeAllViews()
         if (slides.length() == 0) {
+            currentSlide = null
+            currentTitle = "Klocka & datum"
+            currentBody = ""
+            currentKind = "clock"
+            currentSourceUrl = null
+            reportHeartbeat(null, "Klocka & datum", "", "clock", null)
             showIdle()
             return
         }
         val chosen = (0 until slides.length()).map { (index + it) % slides.length() }
             .firstOrNull { candidate -> slides.optJSONObject(candidate)?.let(::isScheduled) == true }
         if (chosen == null) {
+            currentSlide = null
+            currentTitle = "Inget publicerat just nu"
+            currentBody = ""
+            currentKind = null
+            currentSourceUrl = null
+            reportHeartbeat(null, "Inget publicerat just nu", "", null, null)
             showMessage("Inget publicerat just nu", "Nästa synk sker automatiskt.")
             advanceTask = Runnable { index = (index + 1) % slides.length(); showCurrentSlide() }
             handler.postDelayed(advanceTask!!, 30_000)
@@ -193,15 +227,75 @@ class MainActivity : Activity() {
         }
         index = chosen
         val item = slides.optJSONObject(index) ?: return
+        currentSlide = item
+        currentTitle = item.optString("title").ifBlank { "Väntar på innehåll" }
+        currentBody = item.optString("body")
+        currentKind = item.optString("kind").takeIf { it.isNotBlank() }
+        currentSourceUrl = item.optString("source_url").takeIf { it.isNotBlank() }
+        reportHeartbeat(item)
         val duration = item.optInt("duration_seconds", 15).coerceIn(5, 600) * 1000L
         when (item.optString("kind")) {
             "video" -> showVideo(item)
             "clock" -> showClock(item)
             "feed" -> showFeed(item)
+            "web" -> showWeb(item)
             else -> showText(item.optString("title"), item.optString("body"))
         }
         advanceTask = Runnable { index = (index + 1) % slides.length(); showCurrentSlide() }
         handler.postDelayed(advanceTask!!, duration)
+    }
+
+    private fun showWeb(item: JSONObject) {
+        val address = item.optString("source_url")
+        if (!address.startsWith("https://") && !address.startsWith("http://")) {
+            showMessage(item.optString("title", "Webbsida"), "Adressen måste börja med HTTPS.")
+            return
+        }
+        val web = WebView(this).apply {
+            setBackgroundColor(Color.BLACK)
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.cacheMode = WebSettings.LOAD_NO_CACHE
+            settings.mediaPlaybackRequiresUserGesture = false
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            CookieManager.getInstance().setAcceptCookie(true)
+            clearCache(true)
+            webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                    return !url.startsWith("https://") && !url.startsWith("http://")
+                }
+            }
+            webChromeClient = WebChromeClient()
+        }
+        dashboardView = web
+        root.addView(web, FrameLayout.LayoutParams(-1, -1))
+        web.loadUrl(address)
+    }
+
+    private fun reportHeartbeat(item: JSONObject?) {
+        reportHeartbeat(
+            item,
+            item?.optString("title")?.takeIf { it.isNotBlank() } ?: "Väntar på innehåll",
+            item?.optString("body")?.takeIf { it.isNotBlank() } ?: "",
+            item?.optString("kind")?.takeIf { it.isNotBlank() },
+            item?.optString("source_url")?.takeIf { it.isNotBlank() }
+        )
+    }
+
+    private fun reportHeartbeat(item: JSONObject?, title: String, body: String, kind: String?, source: String?) {
+        val id = screenId ?: return
+        worker.execute {
+            try {
+                val body = JSONObject()
+                    .put("input_screen_id", id)
+                    .put("input_current_slide_id", item?.optString("id")?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
+                    .put("input_current_title", title)
+                    .put("input_current_body", body)
+                    .put("input_current_kind", kind ?: JSONObject.NULL)
+                    .put("input_current_source_url", source ?: JSONObject.NULL)
+                apiRequest("${baseUrl()}/rest/v1/rpc/player_heartbeat", "POST", body.toString())
+            } catch (_: Exception) { }
+        }
     }
 
     private fun isScheduled(item: JSONObject): Boolean {
@@ -258,7 +352,14 @@ class MainActivity : Activity() {
             } catch (_: Exception) {
                 prefs.getString("feed_${sha256(source)}", null)?.let(::renderFeed) ?: "Ingen feed kunde hämtas."
             }
-            handler.post { if (generation == slideGeneration) showText(title.ifBlank { "Informationsflöde" }, text) }
+            handler.post {
+                if (generation == slideGeneration) {
+                    showText(title.ifBlank { "Informationsflöde" }, text)
+                    currentTitle = title.ifBlank { "Informationsflöde" }
+                    currentBody = text
+                    reportHeartbeat(item, title.ifBlank { "Informationsflöde" }, text, "feed", source)
+                }
+            }
         }
     }
 
@@ -392,6 +493,7 @@ class MainActivity : Activity() {
         advanceTask?.let(handler::removeCallbacks)
         clockTask?.let(handler::removeCallbacks)
         refreshTask?.let(handler::removeCallbacks)
+        heartbeatTask?.let(handler::removeCallbacks)
         playerVideo?.stopPlayback()
         worker.shutdownNow()
         super.onDestroy()

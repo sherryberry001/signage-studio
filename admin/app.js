@@ -9,6 +9,7 @@ const screenList = $('#screenList');
 const notice = $('#setupNotice');
 let currentUser = null;
 let screens = [];
+let statusTimer = null;
 
 $('#year').textContent = new Date().getFullYear();
 
@@ -46,6 +47,10 @@ function setSession(user) {
   if (user) {
     $('#userEmail').textContent = user.email || 'Admin';
     loadScreens();
+    clearInterval(statusTimer);
+    statusTimer = setInterval(refreshScreenStatus, 5000);
+  } else {
+    clearInterval(statusTimer);
   }
 }
 
@@ -99,30 +104,115 @@ async function loadScreens() {
     if (slideError) toast(slideError.message, true);
     screenList.append(renderScreen(screen, slides || []));
   }
+  updateScreenSummary();
+}
+
+function isOnline(screen) {
+  return Boolean(screen.last_seen_at && Date.now() - new Date(screen.last_seen_at).getTime() < 45_000);
+}
+
+function updateScreenSummary() {
+  const online = screens.filter(isOnline).length;
+  $('#screenCount').textContent = `${screens.length} ${screens.length === 1 ? 'skärm' : 'skärmar'} · ${online} online`;
+}
+
+async function refreshScreenStatus() {
+  if (!currentUser) return;
+  const { data, error } = await supabase.from('screens')
+    .select('id,last_seen_at,current_title,current_body,current_kind,current_source_url,current_slide_id,forced_slide_id');
+  if (error) return;
+  const liveById = new Map((data || []).map(item => [item.id, item]));
+  screens = screens.map(screen => ({ ...screen, ...(liveById.get(screen.id) || {}) }));
+  updateScreenSummary();
+  for (const screen of screens) {
+    const card = screenList.querySelector(`[data-screen-id="${CSS.escape(screen.id)}"]`);
+    if (!card) continue;
+    const online = isOnline(screen);
+    const status = card.querySelector('.screen-live-status');
+    if (status) {
+      status.classList.toggle('online', online);
+      status.classList.toggle('offline', !online);
+      status.querySelector('.status-label').textContent = online ? 'Online nu' : 'Offline';
+      status.querySelector('.last-seen').textContent = screen.last_seen_at
+        ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
+        : 'Spelaren har inte rapporterat ännu';
+    }
+    const current = card.querySelector('.current-content');
+    if (current) {
+      current.querySelector('.current-title').textContent = online ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt';
+      current.querySelector('.current-kind').textContent = online ? kindLabel(screen.current_kind) : 'Skärmen är offline';
+      current.classList.toggle('stale', !online);
+      updateCurrentPreview(current.querySelector('.current-preview'), screen, online);
+    }
+    const forceButton = card.querySelector('.return-playlist');
+    if (forceButton) forceButton.classList.toggle('hidden', !screen.forced_slide_id);
+    card.querySelectorAll('[data-slide-action="show-now"]').forEach(button => {
+      button.classList.toggle('selected', button.dataset.id === screen.forced_slide_id);
+      button.textContent = button.dataset.id === screen.forced_slide_id ? 'Visas nu' : 'Visa nu';
+    });
+  }
 }
 
 function kindLabel(kind) {
-  return ({ text: 'Textmeddelande', video: 'Video', clock: 'Klocka & datum', feed: 'JSON-feed' })[kind] || kind;
+  return ({ text: 'Textmeddelande', video: 'Video', clock: 'Klocka & datum', feed: 'JSON-feed', web: 'Webbsida / live dashboard' })[kind] || kind || '—';
+}
+
+function updateCurrentPreview(container, screen, online) {
+  if (!container) return;
+  const key = online ? `${screen.current_kind || ''}|${screen.current_title || ''}|${screen.current_body || ''}|${screen.current_source_url || ''}` : 'offline';
+  if (container.dataset.previewKey === key) return;
+  container.dataset.previewKey = key;
+  container.replaceChildren();
+  if (!online) {
+    container.textContent = 'Ingen signal från spelaren';
+    return;
+  }
+  if (screen.current_kind === 'web' && /^https?:\/\//i.test(screen.current_source_url || '')) {
+    const frame = document.createElement('iframe');
+    frame.src = screen.current_source_url;
+    frame.title = `Förhandsvisning: ${screen.current_title || 'webbsida'}`;
+    frame.setAttribute('sandbox', 'allow-scripts allow-forms');
+    frame.referrerPolicy = 'no-referrer';
+    container.append(frame);
+  } else if (screen.current_kind === 'video' && /^https:\/\//i.test(screen.current_source_url || '')) {
+    const video = document.createElement('video');
+    video.src = screen.current_source_url;
+    video.muted = true;
+    video.autoplay = true;
+    video.loop = true;
+    video.playsInline = true;
+    container.append(video);
+  } else {
+    const text = document.createElement('div');
+    text.className = 'preview-copy';
+    text.textContent = screen.current_body || (screen.current_kind === 'clock' ? 'Klocka och datum' : screen.current_title || 'Väntar på innehåll');
+    container.append(text);
+  }
 }
 
 function renderScreen(screen, slides) {
   const card = document.createElement('article');
   card.className = 'screen-card';
-  const pending = screen.pair_code ? `<span class="pair-pill">${esc(screen.pair_code)}</span>` : '<span class="pair-pill">KOPPLAD</span>';
+  card.dataset.screenId = screen.id;
+  const pending = screen.pair_code ? `<span class="pair-pill">KOD ${esc(screen.pair_code)}</span>` : '<span class="pair-pill">PARKOPPLAD</span>';
   card.innerHTML = `
     <div class="screen-head">
       <div class="screen-title-wrap"><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${slides.length} objekt</div></div></div>
       <div class="screen-actions">${pending}<button class="button ghost small toggle-screen">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen">Ta bort</button></div>
     </div>
+    <div class="screen-status-row"><div class="screen-live-status ${isOnline(screen) ? 'online' : 'offline'}"><span class="status-indicator"></span><span class="status-label">${isOnline(screen) ? 'Online nu' : 'Offline'}</span><span class="last-seen">${screen.last_seen_at ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Spelaren har inte rapporterat ännu'}</span></div><div class="current-content ${isOnline(screen) ? '' : 'stale'}"><span class="current-content-label">VISAS JUST NU</span><strong class="current-title">${esc(isOnline(screen) ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt')}</strong><span class="current-kind">${esc(isOnline(screen) ? kindLabel(screen.current_kind) : 'Skärmen är offline')}</span><div class="current-preview"></div></div></div>
     <div class="screen-body">
       <p class="pair-help">${screen.pair_code ? 'Öppna Signage Player på TV:n och skriv koden ovan. Koden kan bara användas en gång.' : 'TV:n är parkopplad. Nytt innehåll synkas automatiskt och sparas lokalt för offlinevisning.'}</p>
+      <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id ? '' : 'hidden'}">Återgå till spellistan</button></div>
       <div class="playlist">${slides.map((slide, index) => renderSlide(slide, index, slides.length)).join('') || '<div class="slide-sub">Spellistan är tom. Lägg till ett objekt nedan.</div>'}</div>
       <div class="slide-add-grid">
         <div class="add-box"><h3>Textmeddelande</h3><form class="text-slide-form add-text"><input name="title" maxlength="80" placeholder="Rubrik" required /><textarea name="body" maxlength="1200" placeholder="Meddelande" required></textarea><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="15" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Publicera text</button></div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till" /></div></form></div>
         <div class="add-box"><h3>Video eller JSON-feed</h3><form class="text-slide-form add-source"><select name="kind"><option value="video">Video (MP4-länk eller fil)</option><option value="feed">JSON-feed</option></select><input name="title" maxlength="80" placeholder="Namn på innehåll" required /><input name="url" type="url" placeholder="https://…" /><label class="file-label">För video kan du också välja MP4-fil <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime" /></label><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="30" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till</button></div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till" /></div></form></div>
         <div class="add-box"><h3>Klocka & datum</h3><form class="text-slide-form add-clock"><input name="title" maxlength="80" placeholder="Rubrik, till exempel Välkommen" /><input name="body" maxlength="180" placeholder="Valfri underrad" /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="20" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till klocka</button></div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till" /></div></form></div>
+        <div class="add-box"><h3>Webbsida eller live-dashboard</h3><form class="text-slide-form add-web"><input name="title" maxlength="80" placeholder="Namn på sidan" required /><input name="url" type="url" placeholder="https://…" required /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="60" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till sida</button></div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till" /></div></form></div>
       </div>
     </div>`;
+  updateCurrentPreview(card.querySelector('.current-preview'), screen, isOnline(screen));
 
   card.querySelector('.toggle-screen').addEventListener('click', async () => {
     const { error } = await supabase.from('screens').update({ is_active: !screen.is_active }).eq('id', screen.id);
@@ -136,13 +226,33 @@ function renderScreen(screen, slides) {
   card.querySelector('.add-text').addEventListener('submit', event => addSlide(event, screen, 'text'));
   card.querySelector('.add-clock').addEventListener('submit', event => addSlide(event, screen, 'clock'));
   card.querySelector('.add-source').addEventListener('submit', event => addSource(event, screen, slides.length));
+  card.querySelector('.add-web').addEventListener('submit', event => addWeb(event, screen));
   card.querySelectorAll('[data-slide-action]').forEach(button => button.addEventListener('click', () => slideAction(button, screen, slides)));
+  card.querySelector('.return-playlist').addEventListener('click', async () => setForcedSlide(screen, null));
   return card;
 }
 
 function renderSlide(slide, index, count) {
   const detail = slide.kind === 'text' ? (slide.body || '') : slide.kind === 'clock' ? 'Lokal tid och datum' : (slide.source_url || 'Ingen källa');
-  return `<div class="slide-row"><div class="slide-thumb">${slide.kind === 'video' ? '▶' : slide.kind === 'feed' ? '↗' : slide.kind === 'clock' ? '◷' : 'T'}</div><div><div class="slide-title">${esc(slide.title || kindLabel(slide.kind))}</div><div class="slide-sub">${esc(kindLabel(slide.kind))} · ${slide.duration_seconds}s · ${esc(detail)}</div></div><div class="slide-buttons"><button class="icon-button" data-slide-action="up" data-id="${slide.id}" ${index === 0 ? 'disabled' : ''}>↑</button><button class="icon-button" data-slide-action="down" data-id="${slide.id}" ${index === count - 1 ? 'disabled' : ''}>↓</button><button class="icon-button delete" data-slide-action="delete" data-id="${slide.id}">×</button></div></div>`;
+  return `<div class="slide-row"><div class="slide-thumb">${slide.kind === 'video' ? '▶' : slide.kind === 'feed' ? '↗' : slide.kind === 'web' ? '↗' : slide.kind === 'clock' ? '◷' : 'T'}</div><div><div class="slide-title">${esc(slide.title || kindLabel(slide.kind))}</div><div class="slide-sub">${esc(kindLabel(slide.kind))} · ${slide.duration_seconds}s · ${esc(detail)}</div></div><div class="slide-buttons"><button class="button ghost small show-now" data-slide-action="show-now" data-id="${slide.id}">Visa nu</button><button class="icon-button" data-slide-action="up" data-id="${slide.id}" ${index === 0 ? 'disabled' : ''}>↑</button><button class="icon-button" data-slide-action="down" data-id="${slide.id}" ${index === count - 1 ? 'disabled' : ''}>↓</button><button class="icon-button delete" data-slide-action="delete" data-id="${slide.id}">×</button></div></div>`;
+}
+
+async function setForcedSlide(screen, slideId) {
+  const { error } = await supabase.from('screens').update({ forced_slide_id: slideId }).eq('id', screen.id);
+  if (error) return toast(error.message, true);
+  toast(slideId ? 'Skärmen byter innehåll inom några sekunder.' : 'Spellistan aktiveras igen.');
+  await loadScreens();
+}
+
+async function addWeb(event, screen) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const f = new FormData(form);
+  const source_url = String(f.get('url') || '').trim();
+  if (!/^https?:\/\//i.test(source_url)) return toast('Ange en adress som börjar med HTTPS eller HTTP.', true);
+  const { error } = await supabase.from('slides').insert({ screen_id: screen.id, kind: 'web', title: String(f.get('title') || '').trim(), source_url, duration_seconds: Number(f.get('duration')) || 60, sort_order: await nextOrder(screen.id), is_active: true, ...scheduleValues(f) });
+  if (error) return toast(error.message, true);
+  form.reset(); toast('Webbsidan lades till i spellistan.'); await loadScreens();
 }
 
 async function nextOrder(screenId) {
@@ -194,6 +304,7 @@ async function slideAction(button, screen, slides) {
   const id = button.dataset.id;
   const action = button.dataset.slideAction;
   const index = slides.findIndex(item => item.id === id);
+  if (action === 'show-now') return setForcedSlide(screen, screen.forced_slide_id === id ? null : id);
   if (action === 'delete') {
     const { error } = await supabase.from('slides').delete().eq('id', id);
     if (error) return toast(error.message, true);

@@ -8,7 +8,7 @@
         android:banner="@android:drawable/sym_def_app_icon"
         android:label="Signage Player"
         android:theme="@android:style/Theme.Material.NoActionBar"
-        android:usesCleartextTraffic="false">
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize"
