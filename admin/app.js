@@ -353,7 +353,7 @@ function renderSlide(slide, index, count, canEdit) {
 }
 
 async function setForcedSlide(screen, slideId) {
-  const { error } = await supabase.from('screens').update({ forced_slide_id: slideId }).eq('id', screen.id);
+  const { error } = await supabase.rpc('set_screen_forced_slide', { input_screen_id: screen.id, input_slide_id: slideId });
   if (error) return toast(error.message, true);
   toast(slideId ? 'Skärmen byter innehåll inom några sekunder.' : 'Spellistan aktiveras igen.');
   await loadScreens();
