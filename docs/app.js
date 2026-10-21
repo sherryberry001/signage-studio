@@ -1343,6 +1343,25 @@ function mediaFolderOptions(selectedId = '') {
   return `<option value="">Utan mapp</option>${mediaFolders.map(folder => `<option value="${esc(folder.id)}" ${folder.id === selectedId ? 'selected' : ''}>${esc(folder.name)}</option>`).join('')}`;
 }
 
+function mediaLibraryPreview(item) {
+  if (['image', 'video'].includes(item.kind) && /^https?:\/\//i.test(item.source_url || '')) {
+    const media = item.kind === 'image'
+      ? `<img data-media-preview src="${esc(item.source_url)}" alt="Förhandsvisning av ${esc(item.title)}" loading="lazy" referrerpolicy="no-referrer" />`
+      : `<video data-media-preview controls preload="metadata" playsinline aria-label="Förhandsvisning av ${esc(item.title)}"><source src="${esc(item.source_url)}" /></video>`;
+    return `<details class="media-library-preview"><summary>Förhandsvisa ${item.kind === 'image' ? 'bild' : 'video'}</summary><div class="media-library-preview-stage">${media}<small data-media-preview-note>Hämtar mediaförhandsvisning …</small></div></details>`;
+  }
+  if (item.kind === 'text') {
+    return `<details class="media-library-preview"><summary>Förhandsvisa text</summary><div class="media-library-text-preview">${esc(item.body || 'Textinnehållet är tomt.')}</div></details>`;
+  }
+  if (item.kind === 'web' && /^https?:\/\//i.test(item.source_url || '')) {
+    return `<details class="media-library-preview"><summary>Kontrollera webblänk</summary><div class="media-library-link-preview"><span>Öppna källan separat. Vissa webbplatser blockerar inbäddning på skärmar.</span><a href="${esc(item.source_url)}" target="_blank" rel="noopener noreferrer">Öppna webbsidan ↗</a></div></details>`;
+  }
+  if (item.kind === 'feed') {
+    return `<details class="media-library-preview"><summary>Förhandsvisning av live-data</summary><div class="media-library-link-preview"><span>Liveförhandsvisningen hämtar data på serversidan när innehållet ligger i ett skärm- eller kanalutkast. Skyddade anslutningsuppgifter skickas inte till webbläsaren.</span></div></details>`;
+  }
+  return '';
+}
+
 function renderMediaLibrary() {
   const list = $('#mediaLibraryList');
   if (!list) return;
@@ -1382,9 +1401,27 @@ function renderMediaLibrary() {
       ? `<details class="media-file-history"><summary>Filhistorik · ${fileVersions.length} versioner</summary><div class="media-file-version-list">${fileVersions.map(version => `<div class="media-file-version"><span><strong>Version ${esc(version.version)}${version.source_url === item.source_url ? ' · nuvarande fil' : ''}</strong><small>${esc(version.file_name || 'Mediafil')} · ${esc(new Date(version.created_at).toLocaleString('sv-SE'))}</small></span>${version.source_url !== item.source_url && ['admin','editor'].includes(currentRole) ? `<button class="button ghost small" type="button" data-library-version-restore="${esc(version.id)}" data-library-version-asset="${esc(item.id)}">Återställ</button>` : ''}</div>`).join('')}</div></details>`
       : '';
     const fileAccept = item.kind === 'image' ? 'image/jpeg,image/png,image/webp' : 'video/mp4,video/webm,video/quicktime';
-    row.innerHTML = `<div class="media-library-main"><div class="media-library-detail"><strong>${esc(item.title)}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s${item.kind === 'feed' ? ` · hämtas var ${item.refresh_interval_seconds || 30}s` : ''} · ${esc(folderName)} · ${esc(expiryLabel)} ${item.tags?.length ? `· ${item.tags.map(tag => `#${esc(tag)}`).join(' ')}` : ''}</span><small>${esc(sourceLabel)}</small></div><details class="media-library-edit" ${['admin','editor'].includes(currentRole) ? '' : 'hidden'}><summary>Redigera</summary><form data-library-edit="${esc(item.id)}"><input name="title" maxlength="120" value="${esc(item.title)}" required aria-label="Namn" /><select name="folder_id" aria-label="Mapp">${mediaFolderOptions(item.folder_id || '')}</select><input name="source_url" type="url" value="${esc(item.source_url || '')}" placeholder="Källans URL" aria-label="Källans URL" /><label class="library-integration-setting ${item.kind === 'feed' ? '' : 'hidden'}">Pulse-anslutning<select name="integration_id" data-selected-integration="${esc(item.integration_id || '')}"><option value="">Vanlig JSON-feed</option></select></label><textarea name="body" maxlength="1200" placeholder="Textinnehåll" aria-label="Textinnehåll">${esc(item.body || '')}</textarea><input name="tags" maxlength="200" value="${esc((item.tags || []).join(', '))}" placeholder="Taggar, separerade med komma" aria-label="Taggar" /><label class="media-expiry-field">Utgångstid (valfritt)<input name="expires_at" type="datetime-local" value="${esc(localDateTimeInput(item.expires_at))}" /><small>Poster slutar visas efter tiden även från TV:ns offlinecache.</small></label>${['image','video'].includes(item.kind) ? `<label class="file-label">Ersätt ${item.kind === 'image' ? 'bild' : 'video'} (valfritt) <input name="file" type="file" accept="${fileAccept}" /></label>` : ''}${item.kind === 'feed' ? `<label class="feed-refresh-setting">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="${item.refresh_interval_seconds || 30}" required /></label>` : ''}${versionHistory}<button class="button ghost small" type="submit">Spara ändringar</button></form></details></div><div class="media-library-actions"><select aria-label="Välj spellista för ${esc(item.title)}" data-library-playlist>${options}</select><button class="button ghost small" type="button" data-library-add="${esc(item.id)}" ${['admin','editor'].includes(currentRole) && !expired ? '' : 'disabled'}>${expired ? 'Utgången' : 'Lägg till'}</button><button class="icon-button delete" type="button" aria-label="Ta bort ${esc(item.title)}" data-library-delete="${esc(item.id)}" ${currentRole === 'admin' || currentRole === 'editor' ? '' : 'hidden'}>×</button></div>`;
+    row.innerHTML = `<div class="media-library-main"><div class="media-library-detail"><strong>${esc(item.title)}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s${item.kind === 'feed' ? ` · hämtas var ${item.refresh_interval_seconds || 30}s` : ''} · ${esc(folderName)} · ${esc(expiryLabel)} ${item.tags?.length ? `· ${item.tags.map(tag => `#${esc(tag)}`).join(' ')}` : ''}</span><small>${esc(sourceLabel)}</small></div>${mediaLibraryPreview(item)}<details class="media-library-edit" ${['admin','editor'].includes(currentRole) ? '' : 'hidden'}><summary>Redigera</summary><form data-library-edit="${esc(item.id)}"><input name="title" maxlength="120" value="${esc(item.title)}" required aria-label="Namn" /><select name="folder_id" aria-label="Mapp">${mediaFolderOptions(item.folder_id || '')}</select><input name="source_url" type="url" value="${esc(item.source_url || '')}" placeholder="Källans URL" aria-label="Källans URL" /><label class="library-integration-setting ${item.kind === 'feed' ? '' : 'hidden'}">Pulse-anslutning<select name="integration_id" data-selected-integration="${esc(item.integration_id || '')}"><option value="">Vanlig JSON-feed</option></select></label><textarea name="body" maxlength="1200" placeholder="Textinnehåll" aria-label="Textinnehåll">${esc(item.body || '')}</textarea><input name="tags" maxlength="200" value="${esc((item.tags || []).join(', '))}" placeholder="Taggar, separerade med komma" aria-label="Taggar" /><label class="media-expiry-field">Utgångstid (valfritt)<input name="expires_at" type="datetime-local" value="${esc(localDateTimeInput(item.expires_at))}" /><small>Poster slutar visas efter tiden även från TV:ns offlinecache.</small></label>${['image','video'].includes(item.kind) ? `<label class="file-label">Ersätt ${item.kind === 'image' ? 'bild' : 'video'} (valfritt) <input name="file" type="file" accept="${fileAccept}" /></label>` : ''}${item.kind === 'feed' ? `<label class="feed-refresh-setting">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="${item.refresh_interval_seconds || 30}" required /></label>` : ''}${versionHistory}<button class="button ghost small" type="submit">Spara ändringar</button></form></details></div><div class="media-library-actions"><select aria-label="Välj spellista för ${esc(item.title)}" data-library-playlist>${options}</select><button class="button ghost small" type="button" data-library-add="${esc(item.id)}" ${['admin','editor'].includes(currentRole) && !expired ? '' : 'disabled'}>${expired ? 'Utgången' : 'Lägg till'}</button><button class="icon-button delete" type="button" aria-label="Ta bort ${esc(item.title)}" data-library-delete="${esc(item.id)}" ${currentRole === 'admin' || currentRole === 'editor' ? '' : 'hidden'}>×</button></div>`;
     return row;
   }));
+  list.querySelectorAll('[data-media-preview]').forEach(media => {
+    const note = media.closest('.media-library-preview-stage')?.querySelector('[data-media-preview-note]');
+    const failed = () => { if (note) note.textContent = 'Webbläsaren kunde inte läsa förhandsvisningen. Kontrollera källan och prova på en testskärm.'; };
+    media.addEventListener('error', failed, { once: true });
+    if (media instanceof HTMLImageElement) {
+      media.addEventListener('load', () => {
+        if (!note) return;
+        const pixels = media.naturalWidth * media.naturalHeight;
+        note.textContent = `${media.naturalWidth} × ${media.naturalHeight} px${pixels > 20_000_000 ? ' · mycket hög upplösning kan belasta TV-minnet' : ''} · förhandsvisning i webbläsaren`;
+      }, { once: true });
+    } else if (media instanceof HTMLVideoElement) {
+      media.addEventListener('loadedmetadata', () => {
+        if (!note) return;
+        const duration = Number.isFinite(media.duration) ? `${Math.round(media.duration)} sek` : 'okänd längd';
+        note.textContent = `${media.videoWidth} × ${media.videoHeight} px · ${duration} · browseravkodning bekräftad, TV-uppspelning verifieras separat`;
+      }, { once: true });
+    }
+  });
   populateFeedIntegrationSelects();
   list.querySelectorAll('[data-library-edit] [name="integration_id"]').forEach(select => {
     select.addEventListener('change', () => syncFeedIntegrationField(select.form));

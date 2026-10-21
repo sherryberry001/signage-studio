@@ -7,7 +7,7 @@ This document uses ScreenCloud's publicly described product areas as a capabilit
 | Product area | Signage Studio today | Work to reach a mature platform |
 | --- | --- | --- |
 | Screen fleet | Native Android TV player, pairing/recovery, locations and groups, online state, current item, live captures, diagnostics, bulk sync/restart, deduplicated pending operations | Remote device settings and recovery; email/webhook alert routing |
-| Content library | Text, image, video, web, JSON/Pulse feeds, tags, folders, reuse, expiry, resumable uploads, file replacement and restore history | Processing/transcoding, document/PDF support, content preview and validation |
+| Content library | Text, image, video, web, JSON/Pulse feeds, tags, folders, reuse, expiry, resumable uploads, file replacement and restore history | Processing/transcoding, document/PDF support, and TV-side codec validation |
 | Authoring | Structured text/feed presentation and TV layouts with ticker or side zone | Screen canvas/editor, reusable brand templates, safe-area/layout preview, schedule-aware preview, reusable app configurations |
 | Playlists | Ordered reusable playlists, screen assignment, multi-zone support, playlist copy including slide schedule and ordering | Playlist version history, randomized playback |
 | Channels and scheduling | Reusable channels, playlist priority, recurring schedules, calendar, temporary casts, expiry, draft preview, atomic per-screen publish and append-only version restore | Explicit discard, conflict resolution and richer recurrence/availability rules |
