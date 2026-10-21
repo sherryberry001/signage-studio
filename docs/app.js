@@ -145,7 +145,8 @@ const draftPreviewAbortControllers = new Set();
 let draftPreviewRefreshTimer = null;
 const authView = $('#authView');
 const appView = $('#appView');
-const screenList = $('#screenList');
+const screenDirectoryList = $('#screenDirectoryList');
+const screenDetailContent = $('#screenDetailContent');
 const notice = $('#setupNotice');
 let currentUser = null;
 let screens = [];
@@ -193,8 +194,11 @@ let screensLoadId = 0;
 let activityLoadId = 0;
 const selectedScreenIds = new Set();
 let activeWorkspace = 'screens';
+let selectedScreenDetailId = null;
+let screenRenderData = new Map();
 const workspaceDetails = {
   screens: ['Skärmöversikt', 'Övervaka anslutning, innehåll och status för dina skärmar.'],
+  'screen-detail': ['Skärminställningar', 'Hantera innehåll, schema, layout och enhetsinställningar för skärmen.'],
   content: ['Mediabibliotek', 'Hantera återanvändbart innehåll och live-data.'],
   playlists: ['Spellistor', 'Bygg och organisera spellistor för dina skärmar.'],
   channels: ['Kanaler & schema', 'Planera vad som ska visas, när det ska visas och på vilka skärmar.'],
@@ -226,13 +230,17 @@ function setWorkspace(workspace) {
     panel.classList.toggle('hidden', panel.dataset.workspacePanel !== workspace);
   });
   document.querySelectorAll('.workspace-tab').forEach(button => {
-    const active = button.dataset.workspace === workspace;
+    const active = button.dataset.workspace === (workspace === 'screen-detail' ? 'screens' : workspace);
     button.classList.toggle('active', active);
     if (active) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   });
   $('#workspaceTitle').textContent = workspaceDetails[workspace][0];
   $('#workspaceDescription').textContent = workspaceDetails[workspace][1];
+  if (workspace === 'screen-detail' && selectedScreenDetailId) {
+    const screen = screens.find(item => item.id === selectedScreenDetailId);
+    if (screen) $('#workspaceTitle').textContent = screen.name || 'Skärminställningar';
+  }
   if (workspace === 'activity') {
     loadActivityLog();
     activityTimer = setInterval(loadActivityLog, 15000);
@@ -244,6 +252,22 @@ function setWorkspace(workspace) {
     integrationTimer = setInterval(loadIntegrationStatus, 30000);
   }
   if (workspace === 'broadcasts') renderBroadcastTargets();
+}
+
+$('#screenDetailBack').addEventListener('click', () => setWorkspace('screens'));
+
+function openScreenDetails(screenId) {
+  const renderData = screenRenderData.get(screenId);
+  if (!renderData) return;
+  selectedScreenDetailId = screenId;
+  const currentScreen = screens.find(item => item.id === screenId);
+  const currentRenderData = [...renderData];
+  if (currentScreen) currentRenderData[0] = currentScreen;
+  const card = renderScreen(...currentRenderData);
+  card.classList.add('screen-detail-card');
+  screenDetailContent.replaceChildren(card);
+  $('#workspaceTitle').textContent = screens.find(item => item.id === screenId)?.name || 'Skärminställningar';
+  setWorkspace('screen-detail');
 }
 
 setWorkspace('screens');
@@ -350,8 +374,11 @@ function setSession(user) {
     selectedScreenIds.clear();
     currentRole = null;
     activeWorkspace = 'screens';
+    selectedScreenDetailId = null;
+    screenRenderData.clear();
     setWorkspace('screens');
-    screenList.replaceChildren();
+    screenDirectoryList.replaceChildren();
+    screenDetailContent.replaceChildren();
     clearInterval(statusTimer);
     clearInterval(alertTimer);
     clearInterval(activityTimer);
@@ -895,7 +922,6 @@ async function loadScreens() {
     mediaFolders = [];
     mediaLibraryVersions = [];
     playlists = [];
-    screenList.replaceChildren();
     $('#emptyState').classList.add('hidden');
     updateScreenSummary();
     return;
@@ -976,31 +1002,21 @@ async function loadScreens() {
     const key = screenProfileKey(screen);
     duplicateNames.set(key, (duplicateNames.get(key) || 0) + 1);
   });
-  const cards = screens.map((screen, index) => {
+  screenRenderData = new Map();
+  screens.forEach((screen, index) => {
     const { data: slides, error: slideError } = slideResults[index];
     if (slideError) toast(slideError.message, true);
     const screenChannelIds = new Set(channelSchedules.filter(item => item.screen_id === screen.id).map(item => item.channel_id));
     const screenChannelPlaylistIds = new Set(channelPlaylists.filter(item => screenChannelIds.has(item.channel_id)).map(item => item.playlist_id));
     const screenChannelSlides = (channelSlideData || []).filter(item => screenChannelPlaylistIds.has(item.playlist_id));
-    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(screenProfileKey(screen)) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides, latestPublications.get(screen.id), publicationHistory.get(screen.id) || [], (approvalData || []).filter(request => request.screen_id === screen.id));
+    const args = [screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(screenProfileKey(screen)) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides, latestPublications.get(screen.id), publicationHistory.get(screen.id) || [], (approvalData || []).filter(request => request.screen_id === screen.id)];
+    screenRenderData.set(screen.id, args);
   });
-  const grouped = screenProfileGroups(screens).map(entries => entries.map(screen => ({
-    screen,
-    card: cards[screens.findIndex(item => item.id === screen.id)]
-  })));
-  const rows = [];
-  for (const entries of grouped) {
-    if (entries.length === 1) { rows.push(entries[0].card); continue; }
-    entries.sort((a, b) => compareScreenProfiles(a.screen, b.screen));
-    rows.push(entries[0].card);
-    const duplicates = document.createElement('details');
-    duplicates.className = 'duplicate-screen-group';
-    duplicates.innerHTML = `<summary>Äldre profiler för ”${esc(entries[0].screen.name || 'Skärm')}” · ${entries.length - 1} dolda <span>Visa</span></summary><div class="duplicate-screen-items"></div>`;
-    const items = duplicates.querySelector('.duplicate-screen-items');
-    entries.slice(1).forEach(entry => items.append(entry.card));
-    rows.push(duplicates);
+  renderScreenDirectory();
+  if (selectedScreenDetailId && activeWorkspace === 'screen-detail') {
+    if (screenRenderData.has(selectedScreenDetailId)) openScreenDetails(selectedScreenDetailId);
+    else { selectedScreenDetailId = null; setWorkspace('screens'); }
   }
-  screenList.replaceChildren(...rows);
   selectedScreenIds.forEach(id => { if (!screens.some(screen => screen.id === id)) selectedScreenIds.delete(id); });
   $('#selectVisibleScreens').classList.toggle('hidden', !['admin', 'editor'].includes(currentRole));
   applyScreenFilters();
@@ -2083,14 +2099,7 @@ $('#operationalAlerts').addEventListener('click', event => {
     renderIntegrationStatus();
     return;
   }
-  setWorkspace('screens');
-  const card = screenList.querySelector(`[data-screen-id="${CSS.escape(screenId)}"]`);
-  if (!card) return;
-  const group = card.closest('.duplicate-screen-group');
-  if (group) group.open = true;
-  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  card.classList.add('alert-focus');
-  setTimeout(() => card.classList.remove('alert-focus'), 1800);
+  openScreenDetails(screenId);
 });
 
 function updateScreenSummary() {
@@ -2099,27 +2108,69 @@ function updateScreenSummary() {
   const hiddenProfiles = screens.length - devices.length;
   $('#screenCount').textContent = `${devices.length} ${devices.length === 1 ? 'TV' : 'TV-apparater'} · ${online} online${hiddenProfiles ? ` · ${hiddenProfiles} äldre profiler dolda` : ''}`;
   renderOperationalAlerts();
+  renderScreenDirectory();
 }
+
+function renderScreenDirectory() {
+  if (!screenDirectoryList) return;
+  const devices = logicalScreens();
+  const cardsMarkup = devices.map(screen => {
+    const online = isOnline(screen);
+    const group = screenGroups.find(item => item.id === screen.group_id)?.name;
+    const location = locations.find(item => item.id === screen.location_id)?.name;
+    const current = online ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt';
+    const currentKind = online ? kindLabel(screen.current_kind) : 'Offline';
+    const selected = screenProfileIds(screen.id).some(id => selectedScreenIds.has(id));
+    const duplicateCount = screenProfileGroups().find(entries => entries.some(item => item.id === screen.id))?.length || 1;
+    return `<article class="screen-directory-card" data-screen-id="${esc(screen.id)}" data-screen-name="${esc(screen.name || '')}" data-screen-current="${esc(screen.current_title || '')}" data-screen-status="${online ? 'online' : screen.pair_code ? 'pairing' : 'offline'}" data-screen-group="${esc(screen.group_id || '')}" data-screen-location="${esc(screen.location_id || '')}">
+      <label class="screen-directory-select"><input class="screen-directory-checkbox" type="checkbox" ${selected ? 'checked' : ''} ${['admin', 'editor'].includes(currentRole) ? '' : 'disabled'} aria-label="Välj ${esc(screen.name)}" /></label>
+      <button class="screen-directory-open" type="button" data-open-screen="${esc(screen.id)}" aria-label="Öppna inställningar för ${esc(screen.name)}">
+        <span class="screen-directory-icon">▣</span><span class="screen-directory-main"><strong>${esc(screen.name || 'Namnlös skärm')}</strong><small>${esc([location, group].filter(Boolean).join(' · ') || 'Ingen plats eller grupp')}${duplicateCount > 1 ? ` · ${duplicateCount - 1} äldre profil${duplicateCount > 2 ? 'er' : ''} dolda` : ''}</small></span>
+        <span class="screen-directory-now"><small>VISAS JUST NU</small><strong>${esc(current)}</strong><small>${esc(currentKind)}</small></span>
+        <span class="screen-directory-status ${online ? 'online' : 'offline'}"><i></i>${online ? 'Online' : screen.pair_code ? 'Parkoppling' : 'Offline'}</span><span class="screen-directory-arrow">→</span>
+      </button>
+    </article>`;
+  }).join('') || '<div class="screen-directory-empty">Inga tillgängliga skärmar ännu.</div>';
+  const markup = `${cardsMarkup}<div class="screen-directory-empty screen-directory-no-results hidden">Inga skärmar matchar de valda filtren.</div>`;
+  if (screenDirectoryList.innerHTML !== markup) {
+    screenDirectoryList.innerHTML = markup;
+    applyScreenFilters();
+  }
+}
+
+screenDirectoryList.addEventListener('click', event => {
+  const checkbox = event.target.closest('.screen-directory-checkbox');
+  if (checkbox) {
+    const card = checkbox.closest('[data-screen-id]');
+    const ids = screenProfileIds(card.dataset.screenId);
+    ids.forEach(id => checkbox.checked ? selectedScreenIds.add(id) : selectedScreenIds.delete(id));
+    updateBulkScreenActions();
+    renderScreenDirectory();
+    applyScreenFilters();
+    return;
+  }
+  const openButton = event.target.closest('[data-open-screen]');
+  if (openButton) openScreenDetails(openButton.dataset.openScreen);
+});
 
 $('#screenSearch').addEventListener('input', applyScreenFilters);
 $('#screenFilter').addEventListener('change', applyScreenFilters);
 $('#locationFilter').addEventListener('change', applyScreenFilters);
 $('#groupFilter').addEventListener('change', applyScreenFilters);
 $('#selectVisibleScreens').addEventListener('click', () => {
-  const visibleCards = [...screenList.querySelectorAll('.screen-card:not(.hidden)')].filter(isCardVisible);
-  const allSelected = visibleCards.length > 0 && visibleCards.every(card => selectedScreenIds.has(card.dataset.screenId));
-  visibleCards.forEach(card => {
-    if (allSelected) selectedScreenIds.delete(card.dataset.screenId);
-    else selectedScreenIds.add(card.dataset.screenId);
-    const checkbox = card.querySelector('.screen-select');
-    if (checkbox) checkbox.checked = selectedScreenIds.has(card.dataset.screenId);
-  });
+  const visibleCards = [...screenDirectoryList.querySelectorAll('.screen-directory-card:not(.hidden)')];
+  const visibleIds = visibleCards.flatMap(card => screenProfileIds(card.dataset.screenId));
+  const allSelected = visibleIds.length > 0 && visibleIds.every(id => selectedScreenIds.has(id));
+  visibleIds.forEach(id => allSelected ? selectedScreenIds.delete(id) : selectedScreenIds.add(id));
+  renderScreenDirectory();
+  applyScreenFilters();
   $('#selectVisibleScreens').textContent = allSelected ? 'Välj synliga' : 'Avmarkera synliga';
   updateBulkScreenActions();
 });
 $('#clearScreenSelection').addEventListener('click', () => {
   selectedScreenIds.clear();
-  screenList.querySelectorAll('.screen-select').forEach(checkbox => { checkbox.checked = false; });
+  renderScreenDirectory();
+  applyScreenFilters();
   $('#selectVisibleScreens').textContent = 'Välj synliga';
   updateBulkScreenActions();
 });
@@ -2142,7 +2193,7 @@ function applyScreenFilters() {
   const selectedLocation = $('#locationFilter').value;
   const selectedGroup = $('#groupFilter').value;
   const visible = [];
-  screenList.querySelectorAll('.screen-card').forEach(card => {
+  screenDirectoryList.querySelectorAll('.screen-directory-card').forEach(card => {
     const screen = screens.find(item => item.id === card.dataset.screenId);
     const matchesName = !query || `${screen?.name || ''} ${screen?.current_title || ''}`.toLocaleLowerCase('sv-SE').includes(query);
     const matchesStatus = filter === 'all'
@@ -2159,12 +2210,9 @@ function applyScreenFilters() {
     card.classList.toggle('hidden', !show);
     if (show) visible.push(card);
   });
-  screenList.querySelectorAll('.duplicate-screen-group').forEach(group => {
-    const hasMatch = Boolean(group.querySelector('.screen-card:not(.hidden)'));
-    group.classList.toggle('hidden', !hasMatch);
-    if (hasMatch && group.previousElementSibling?.classList.contains('hidden')) group.open = true;
-  });
-  $('#visibleScreenCount').textContent = `${visible.length} profiler visade`;
+  $('#visibleScreenCount').textContent = `${visible.length} TV-apparater visade`;
+  const noMatches = screenDirectoryList.querySelector('.screen-directory-no-results');
+  if (noMatches) noMatches.classList.toggle('hidden', visible.length > 0 || screens.length === 0);
   updateBulkScreenActions();
 }
 
@@ -2212,20 +2260,15 @@ async function assignSelectedScreensToLocation() {
   await loadScreens();
 }
 
-function isCardVisible(card) {
-  if (card.classList.contains('hidden')) return false;
-  const group = card.closest('.duplicate-screen-group');
-  return !group || group.open;
-}
-
 function updateBulkScreenActions() {
   const canOperate = currentRole === 'admin' || currentRole === 'editor';
   const actions = $('#bulkScreenActions');
   if (!actions) return;
   actions.classList.toggle('hidden', !canOperate || selectedScreenIds.size === 0);
   $('#selectedScreenCount').textContent = `${selectedLogicalScreens().length} TV-apparater valda`;
-  const visibleCards = [...screenList.querySelectorAll('.screen-card:not(.hidden)')].filter(isCardVisible);
-  const allVisibleSelected = visibleCards.length > 0 && visibleCards.every(card => selectedScreenIds.has(card.dataset.screenId));
+  const visibleCards = [...screenDirectoryList.querySelectorAll('.screen-directory-card:not(.hidden)')];
+  const visibleIds = visibleCards.flatMap(card => screenProfileIds(card.dataset.screenId));
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedScreenIds.has(id));
   $('#selectVisibleScreens').textContent = allVisibleSelected ? 'Avmarkera synliga' : 'Välj synliga';
 }
 
@@ -2702,9 +2745,9 @@ async function refreshScreenStatus() {
   updateScreenSummary();
   renderScreenBroadcasts();
   for (const screen of screens) {
-    const card = screenList.querySelector(`[data-screen-id="${CSS.escape(screen.id)}"]`);
-    if (!card) continue;
     const online = isOnline(screen);
+    const cards = screenDetailContent.querySelectorAll(`[data-screen-id="${CSS.escape(screen.id)}"]`);
+    cards.forEach(card => {
     const status = card.querySelector('.screen-live-status');
     if (status) {
       status.classList.toggle('online', online);
@@ -2741,6 +2784,7 @@ async function refreshScreenStatus() {
     card.querySelectorAll('.channel-show-now').forEach(button => {
       button.classList.toggle('selected', button.dataset.id === screen.forced_slide_id);
       button.textContent = button.dataset.id === screen.forced_slide_id ? 'Visas nu' : 'Visa nu';
+    });
     });
   }
   applyScreenFilters();
@@ -3461,6 +3505,54 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
         <div class="add-box"><h3>Webbsida eller live-dashboard</h3><form class="text-slide-form add-web"><input name="title" maxlength="80" placeholder="Namn på sidan" required /><input name="url" type="url" placeholder="https://…" required /><label class="web-refresh-setting">Ladda om live-dashboard var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="30" required /><small>Spelaren hämtar sidan på nytt utan att använda HTTP-cache.</small></label><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="60" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till sida</button></div>${scheduleFields()}</form></div>
       </div>
     </div>`;
+  const screenBody = card.querySelector('.screen-body');
+  const settingGroups = [
+    ['overview', 'Översikt', ['.pair-help', '.screen-health-history', '.screen-location-assignment', '.screen-group-assignment']],
+    ['content', 'Innehåll', ['.playlist-assignment', '.playlist-control', '.playlist', '.screen-channel-content', '.slide-add-grid']],
+    ['schedule', 'Schema', ['.screen-operating-form', '.channel-assignment']],
+    ['layout', 'Layout', ['.screen-layout-form']],
+    ['device', 'Enhet & drift', ['.screen-playback-setting', '.screen-autostart-setting', '.player-operations']]
+  ];
+  const settingNav = document.createElement('nav');
+  settingNav.className = 'screen-setting-navigation';
+  settingNav.setAttribute('aria-label', 'Skärminställningar');
+  const settingViews = document.createElement('div');
+  settingViews.className = 'screen-setting-views';
+  settingGroups.forEach(([key, label, selectors], index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `screen-setting-tab${index === 0 ? ' active' : ''}`;
+    button.dataset.screenSetting = key;
+    button.textContent = label;
+    if (index === 0) button.setAttribute('aria-current', 'page');
+    settingNav.append(button);
+    const view = document.createElement('section');
+    view.className = 'screen-setting-view';
+    view.dataset.screenSettingView = key;
+    view.setAttribute('aria-label', label);
+    view.classList.toggle('hidden', index !== 0);
+    selectors.forEach(selector => {
+      const node = screenBody.querySelector(selector);
+      if (node) view.append(node);
+    });
+    if (!view.children.length) view.innerHTML = '<p class="screen-setting-empty">Inga inställningar i den här kategorin.</p>';
+    settingViews.append(view);
+  });
+  screenBody.prepend(settingViews);
+  screenBody.prepend(settingNav);
+  settingNav.addEventListener('click', event => {
+    const button = event.target.closest('[data-screen-setting]');
+    if (!button) return;
+    settingNav.querySelectorAll('.screen-setting-tab').forEach(tab => {
+      const active = tab === button;
+      tab.classList.toggle('active', active);
+      if (active) tab.setAttribute('aria-current', 'page');
+      else tab.removeAttribute('aria-current');
+    });
+    settingViews.querySelectorAll('[data-screen-setting-view]').forEach(view => {
+      view.classList.toggle('hidden', view.dataset.screenSettingView !== button.dataset.screenSetting);
+    });
+  });
   card.querySelector('.preview-screen').addEventListener('click', () => openDraftPreview(
     screen,
     slides,

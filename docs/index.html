@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261206-live-web-reload-v1" />
-    <script type="module" src="./app.js?v=20261206-live-web-reload-v1"></script>
+    <link rel="stylesheet" href="./style.css?v=20261021-screen-detail-v2" />
+    <script type="module" src="./app.js?v=20261021-screen-detail-v2"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -46,7 +46,7 @@
         </div>
         <div class="dashboard-layout">
           <aside class="workspace-sidebar">
-            <div class="workspace-sidebar-heading">Arbetsytor</div>
+            <div class="workspace-sidebar-heading">Meny</div>
             <nav id="workspaceNavigation" class="workspace-navigation" aria-label="Adminytor">
               <div class="workspace-nav-group">
                 <span class="workspace-nav-label">Skärmar</span>
@@ -146,8 +146,12 @@
           <div id="integrationList" class="integration-list" aria-live="polite"></div>
         </section>
         <section class="publish-guidance" data-workspace-panel="screens"><strong>Granska och publicera</strong><span>Innehåll, spellistor, kanalscheman och skärmlayouter sparas som utkast. Redaktörer skickar skärmens utkast till admin för godkännande. Admin kan publicera direkt eller godkänna en inskickad version; då sparas den som en version och synk köas till TV:n.</span></section>
-        <div id="screenList" class="screen-list" data-workspace-panel="screens"></div>
+        <div id="screenDirectoryList" class="screen-directory-list" data-workspace-panel="screens" aria-live="polite"></div>
         <div id="emptyState" class="empty-state hidden" data-workspace-panel="screens"><div class="empty-icon">▣</div><h2>Din första skärm börjar här</h2><p>Skapa en skärm, koppla TV-appen med parkopplingskoden och lägg till ditt första innehåll.</p></div>
+        <section id="screenDetailPanel" class="screen-detail-panel hidden" data-workspace-panel="screen-detail">
+          <button id="screenDetailBack" class="button ghost small screen-detail-back" type="button">← Alla skärmar</button>
+          <div id="screenDetailContent"></div>
+        </section>
           </div>
         </div>
       </section>
