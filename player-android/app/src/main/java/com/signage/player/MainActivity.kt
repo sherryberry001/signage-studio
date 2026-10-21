@@ -65,6 +65,7 @@ class MainActivity : Activity() {
     private var zoneWebView: WebView? = null
     private var refreshTask: Runnable? = null
     private var feedRefreshTask: Runnable? = null
+    private var dashboardRefreshTask: Runnable? = null
     private var advanceTask: Runnable? = null
     private var clockTask: Runnable? = null
     private var heartbeatTask: Runnable? = null
@@ -75,6 +76,7 @@ class MainActivity : Activity() {
     private val pendingPreviewCallbacks = mutableListOf<(String?) -> Unit>()
     private var zoneAdvanceTask: Runnable? = null
     private var zoneClockTask: Runnable? = null
+    private var zoneWebRefreshTask: Runnable? = null
     private var zoneGeneration = 0
     private var slideGeneration = 0
     private var currentSlide: JSONObject? = null
@@ -498,9 +500,12 @@ class MainActivity : Activity() {
         clockTask?.let(handler::removeCallbacks)
         feedRefreshTask?.let(handler::removeCallbacks)
         feedRefreshTask = null
+        dashboardRefreshTask?.let(handler::removeCallbacks)
+        dashboardRefreshTask = null
         playerVideo?.stopPlayback()
         dashboardView?.stopLoading()
         dashboardView?.destroy()
+        dashboardView = null
         clearSecondaryZone()
         playerVideo = null
         root.removeAllViews()
@@ -594,6 +599,8 @@ class MainActivity : Activity() {
         zoneGeneration++
         zoneAdvanceTask?.let(handler::removeCallbacks)
         zoneClockTask?.let(handler::removeCallbacks)
+        zoneWebRefreshTask?.let(handler::removeCallbacks)
+        zoneWebRefreshTask = null
         zoneVideo?.stopPlayback()
         zoneWebView?.stopLoading()
         zoneWebView?.destroy()
@@ -679,6 +686,15 @@ class MainActivity : Activity() {
                     zoneWebView = web
                     container.addView(web, FrameLayout.LayoutParams(-1, -1))
                     web.loadUrl(address)
+                    val refresh = object : Runnable {
+                        override fun run() {
+                            if (generation != zoneGeneration || zoneWebView !== web || zoneRoot !== container) return
+                            web.reload()
+                            handler.postDelayed(this, item.optInt("refresh_interval_seconds", 30).coerceIn(10, 3600) * 1000L)
+                        }
+                    }
+                    zoneWebRefreshTask = refresh
+                    handler.postDelayed(refresh, item.optInt("refresh_interval_seconds", 30).coerceIn(10, 3600) * 1000L)
                 }
             }
             "feed" -> {
@@ -771,6 +787,16 @@ class MainActivity : Activity() {
         dashboardView = web
         root.addView(web, FrameLayout.LayoutParams(-1, -1))
         web.loadUrl(address)
+        val generation = slideGeneration
+        val refresh = object : Runnable {
+            override fun run() {
+                if (generation != slideGeneration || dashboardView !== web || currentSlide?.optString("id") != item.optString("id")) return
+                web.reload()
+                handler.postDelayed(this, item.optInt("refresh_interval_seconds", 30).coerceIn(10, 3600) * 1000L)
+            }
+        }
+        dashboardRefreshTask = refresh
+        handler.postDelayed(refresh, item.optInt("refresh_interval_seconds", 30).coerceIn(10, 3600) * 1000L)
     }
 
     private fun reportHeartbeat(item: JSONObject?) {
@@ -1470,6 +1496,8 @@ class MainActivity : Activity() {
         clockTask?.let(handler::removeCallbacks)
         feedRefreshTask?.let(handler::removeCallbacks)
         feedRefreshTask = null
+        dashboardRefreshTask?.let(handler::removeCallbacks)
+        dashboardRefreshTask = null
         playerVideo?.stopPlayback()
         dashboardView?.stopLoading()
         dashboardView?.destroy()
@@ -1492,6 +1520,8 @@ class MainActivity : Activity() {
         clockTask?.let(handler::removeCallbacks)
         feedRefreshTask?.let(handler::removeCallbacks)
         feedRefreshTask = null
+        dashboardRefreshTask?.let(handler::removeCallbacks)
+        dashboardRefreshTask = null
         playerVideo?.stopPlayback()
         dashboardView?.stopLoading()
         dashboardView?.destroy()
@@ -1598,12 +1628,18 @@ class MainActivity : Activity() {
         advanceTask?.let(handler::removeCallbacks)
         clockTask?.let(handler::removeCallbacks)
         feedRefreshTask?.let(handler::removeCallbacks)
+        dashboardRefreshTask?.let(handler::removeCallbacks)
+        zoneWebRefreshTask?.let(handler::removeCallbacks)
         refreshTask?.let(handler::removeCallbacks)
         heartbeatTask?.let(handler::removeCallbacks)
         previewTask?.let(handler::removeCallbacks)
         deviceReportTask?.let(handler::removeCallbacks)
         scheduleTask?.let(handler::removeCallbacks)
         playerVideo?.stopPlayback()
+        dashboardView?.stopLoading()
+        dashboardView?.destroy()
+        zoneWebView?.stopLoading()
+        zoneWebView?.destroy()
         worker.shutdownNow()
         previewWorker.shutdownNow()
         super.onDestroy()

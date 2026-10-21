@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261205-broadcast-target-filters-v1" />
-    <script type="module" src="./app.js?v=20261205-broadcast-target-filters-v1"></script>
+    <link rel="stylesheet" href="./style.css?v=20261206-live-web-reload-v1" />
+    <script type="module" src="./app.js?v=20261206-live-web-reload-v1"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -112,7 +112,7 @@
             <input name="body" maxlength="1200" placeholder="Textinnehåll (för textmeddelande)" />
             <input name="tags" maxlength="200" placeholder="Taggar, separerade med komma" />
             <label class="media-expiry-field">Utgångstid (valfritt) <input name="expires_at" type="datetime-local" /><small>Poster slutar visas efter tiden, även från TV:ns offlinecache.</small></label>
-            <label class="feed-refresh-setting hidden">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="30" /></label>
+            <label class="feed-refresh-setting hidden"><span>Hämta live-data var (sek)</span><input name="refresh_interval_seconds" type="number" min="10" max="3600" value="30" /><small>Gäller feedar och webbdashboards på TV-spelaren.</small></label>
             <label class="file-label hidden">Video- eller bildfil (valfritt) <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime,image/jpeg,image/png,image/webp" /></label>
             <button class="button primary" type="submit">＋ Spara i biblioteket</button>
           </form>
