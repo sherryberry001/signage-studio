@@ -715,11 +715,79 @@ function renderPlaylistLibrary() {
     const channelCount = channelPlaylists.filter(item => item.playlist_id === playlist.id).length;
     const card = document.createElement('article');
     card.className = 'playlist-manage-card';
-    card.innerHTML = `<div class="playlist-manage-heading"><div><span class="section-kicker">SPELLISTA · ${items.length} OBJEKT</span><form class="playlist-name-form" data-playlist-name="${esc(playlist.id)}"><input name="name" maxlength="80" value="${esc(playlist.name)}" aria-label="Spellistans namn" ${canEdit ? '' : 'disabled'} /><button class="button ghost small" type="submit" ${canEdit ? '' : 'disabled'}>Spara namn</button></form><span>${screenCount} skärmar · ${channelCount} kanaler använder listan</span></div><button class="button ghost small playlist-delete" type="button" data-playlist-delete="${esc(playlist.id)}" ${!canEdit || screenCount > 0 || channelCount > 0 ? 'disabled' : ''} title="${screenCount || channelCount ? 'Ta först bort listan från skärmar och kanaler.' : 'Ta bort tomma eller oanvända spellistor.'}">Ta bort</button></div><div class="playlist-manage-items">${items.map((item, index) => `<div class="playlist-manage-item"><div class="slide-thumb">${item.kind === 'image' ? '▧' : item.kind === 'video' ? '▶' : item.kind === 'feed' || item.kind === 'web' ? '↗' : item.kind === 'clock' ? '◷' : 'T'}</div><div class="playlist-manage-copy"><strong>${esc(item.title || kindLabel(item.kind))}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s</span></div><div class="playlist-manage-actions"><button class="icon-button" type="button" data-playlist-item-action="up" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === 0 ? 'disabled' : ''} aria-label="Flytta upp">↑</button><button class="icon-button" type="button" data-playlist-item-action="down" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === items.length - 1 ? 'disabled' : ''} aria-label="Flytta ned">↓</button><button class="icon-button delete" type="button" data-playlist-item-action="delete" data-playlist-item-id="${esc(item.id)}" ${!canEdit ? 'disabled' : ''} aria-label="Ta bort från spellistan">×</button></div></div>`).join('') || '<div class="playlist-manage-empty">Spellistan är tom. Lägg till publicerat material från biblioteket nedan.</div>'}</div>`;
+    card.dataset.playlistId = playlist.id;
+    card.innerHTML = `<div class="playlist-manage-heading"><div><span class="section-kicker">SPELLISTA · ${items.length} OBJEKT</span><form class="playlist-name-form" data-playlist-name="${esc(playlist.id)}"><input name="name" maxlength="80" value="${esc(playlist.name)}" aria-label="Spellistans namn" ${canEdit ? '' : 'disabled'} /><button class="button ghost small" type="submit" ${canEdit ? '' : 'disabled'}>Spara namn</button></form><span>${screenCount} skärmar · ${channelCount} kanaler använder listan</span></div><button class="button ghost small playlist-delete" type="button" data-playlist-delete="${esc(playlist.id)}" ${!canEdit || screenCount > 0 || channelCount > 0 ? 'disabled' : ''} title="${screenCount || channelCount ? 'Ta först bort listan från skärmar och kanaler.' : 'Ta bort tomma eller oanvända spellistor.'}">Ta bort</button></div><div class="playlist-manage-items">${items.map((item, index) => `<div class="playlist-manage-item" draggable="${canEdit ? 'true' : 'false'}" data-playlist-slide="${esc(item.id)}" aria-label="Flytta ${esc(item.title || kindLabel(item.kind))} i spellistan"><div class="slide-thumb">${item.kind === 'image' ? '▧' : item.kind === 'video' ? '▶' : item.kind === 'feed' || item.kind === 'web' ? '↗' : item.kind === 'clock' ? '◷' : 'T'}</div><div class="playlist-manage-copy"><strong>${esc(item.title || kindLabel(item.kind))}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s</span></div><div class="playlist-manage-actions"><button class="icon-button" type="button" data-playlist-item-action="up" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === 0 ? 'disabled' : ''} aria-label="Flytta upp">↑</button><button class="icon-button" type="button" data-playlist-item-action="down" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === items.length - 1 ? 'disabled' : ''} aria-label="Flytta ned">↓</button><button class="icon-button delete" type="button" data-playlist-item-action="delete" data-playlist-item-id="${esc(item.id)}" ${!canEdit ? 'disabled' : ''} aria-label="Ta bort från spellistan">×</button></div></div>`).join('') || '<div class="playlist-manage-empty">Spellistan är tom. Lägg till publicerat material från biblioteket nedan.</div>'}</div>`;
     return card;
   }));
   if (!playlists.length) container.innerHTML = '<div class="playlist-manage-empty">Skapa en spellista för att samla innehåll och återanvända den på flera skärmar eller i kanaler.</div>';
 }
+
+async function savePlaylistOrder(playlistId, orderedIds) {
+  const current = playlistSlides.filter(slide => slide.playlist_id === playlistId);
+  const expected = new Set(current.map(slide => slide.id));
+  if (orderedIds.length !== expected.size || new Set(orderedIds).size !== expected.size || orderedIds.some(id => !expected.has(id))) {
+    toast('Spellistans ordning kunde inte sparas eftersom listan ändrades. Ladda om och försök igen.', true);
+    await loadScreens();
+    return false;
+  }
+  const { error } = await supabase.rpc('reorder_playlist_slides', {
+    input_playlist_id: playlistId,
+    input_slide_ids: orderedIds
+  });
+  if (error) {
+    toast(error.message, true);
+    await loadScreens();
+    return false;
+  }
+  toast('Spellistans ordning uppdaterades.');
+  await loadScreens();
+  return true;
+}
+
+$('#playlistManagementList').addEventListener('dragstart', event => {
+  const row = event.target.closest('.playlist-manage-item[draggable="true"]');
+  if (!row || !event.dataTransfer) return;
+  const card = row.closest('.playlist-manage-card');
+  card.dataset.draggedSlide = row.dataset.playlistSlide;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', row.dataset.playlistSlide);
+  row.classList.add('dragging');
+});
+
+$('#playlistManagementList').addEventListener('dragover', event => {
+  const target = event.target.closest('.playlist-manage-item');
+  const card = target?.closest('.playlist-manage-card');
+  const draggedId = card?.dataset.draggedSlide;
+  const dragged = card && [...card.querySelectorAll('.playlist-manage-item')].find(item => item.dataset.playlistSlide === draggedId);
+  if (!target || !dragged || target === dragged || target.closest('.playlist-manage-card') !== card) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  $('#playlistManagementList').querySelectorAll('.playlist-manage-item.drop-target').forEach(item => item.classList.remove('drop-target'));
+  target.classList.add('drop-target');
+  const bounds = target.getBoundingClientRect();
+  const insertAfter = event.clientY >= bounds.top + bounds.height / 2;
+  const reference = insertAfter ? target.nextElementSibling : target;
+  if (reference !== dragged && reference !== dragged.nextElementSibling) target.parentElement.insertBefore(dragged, reference);
+});
+
+$('#playlistManagementList').addEventListener('drop', async event => {
+  const card = event.target.closest('.playlist-manage-card');
+  if (!card?.dataset.draggedSlide) return;
+  event.preventDefault();
+  const playlistId = card.dataset.playlistId;
+  const orderedIds = [...card.querySelectorAll('.playlist-manage-item')].map(item => item.dataset.playlistSlide);
+  delete card.dataset.draggedSlide;
+  $('#playlistManagementList').querySelectorAll('.playlist-manage-item').forEach(item => item.classList.remove('dragging', 'drop-target'));
+  await savePlaylistOrder(playlistId, orderedIds);
+});
+
+$('#playlistManagementList').addEventListener('dragend', event => {
+  const card = event.target.closest('.playlist-manage-card');
+  const cancelled = Boolean(card?.dataset.draggedSlide);
+  if (card) delete card.dataset.draggedSlide;
+  $('#playlistManagementList').querySelectorAll('.playlist-manage-item').forEach(item => item.classList.remove('dragging', 'drop-target'));
+  if (cancelled) renderPlaylistLibrary();
+});
 
 $('#playlistManagementList').addEventListener('submit', async event => {
   const form = event.target.closest('[data-playlist-name]');
@@ -760,13 +828,12 @@ $('#playlistManagementList').addEventListener('click', async event => {
   }
   const siblings = playlistSlides.filter(slide => slide.playlist_id === item.playlist_id);
   const index = siblings.findIndex(slide => slide.id === item.id);
-  const other = siblings[index + (action === 'up' ? -1 : 1)];
-  if (!other) return;
-  const first = await supabase.from('slides').update({ sort_order: other.sort_order }).eq('id', item.id);
-  if (first.error) return toast(first.error.message, true);
-  const second = await supabase.from('slides').update({ sort_order: item.sort_order }).eq('id', other.id);
-  if (second.error) return toast(second.error.message, true);
-  await loadScreens();
+  const targetIndex = index + (action === 'up' ? -1 : 1);
+  if (targetIndex < 0 || targetIndex >= siblings.length) return;
+  const reordered = [...siblings];
+  const [moved] = reordered.splice(index, 1);
+  reordered.splice(targetIndex, 0, moved);
+  await savePlaylistOrder(item.playlist_id, reordered.map(slide => slide.id));
 });
 
 function renderMediaLibrary() {
