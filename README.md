@@ -1,5 +1,7 @@
 # Signage Studio
 
+Produktens målbild och luckor mot en mogen skyltplattform finns i [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md). Signage Studio bygger egen kod och egen design, med målet att täcka motsvarande arbetsflöden.
+
 En liten, egen digital-signage-lösning för Philips Android TV. TV:n kör en native Android-app i helskärm; den använder inte TV:ns webbläsare. Adminvyn används från dator/mobil och publiceras som statiska filer från GitHub Pages. Spellistor och publicerat innehåll sparas i Supabase. GitHub innehåller applikationskoden, inte publicerade videor eller meddelanden.
 
 ## Innehåll som går att visa

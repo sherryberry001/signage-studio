@@ -1,0 +1,47 @@
+# Signage Studio capability target
+
+This document uses ScreenCloud's publicly described product areas as a capability benchmark. Signage Studio will use its own code, product identity, layouts, and interaction design. The goal is equivalent customer outcomes where the current TV/player stack supports them, with explicit boundaries where managed hardware or third-party integrations are required.
+
+## Capability map
+
+| Product area | Signage Studio today | Work to reach a mature platform |
+| --- | --- | --- |
+| Screen fleet | Native Android TV player, pairing/recovery, groups, online state, current item, live captures, diagnostics, bulk sync/restart | Locations/spaces that own screens and content; stable device identity and duplicate cleanup; configurable health alerts; remote device settings and recovery |
+| Content library | Text, image, video, web, JSON/Pulse feeds, tags, reuse, expiry, upload to Supabase storage | Resumable uploads, processing/transcoding, folders, document/PDF support, replace-file history, preview and content validation |
+| Authoring | Structured text/feed presentation and TV layouts with ticker or side zone | Screen canvas/editor, reusable brand templates, safe-area/layout preview, schedule-aware preview, reusable app configurations |
+| Playlists | Ordered reusable playlists, screen assignment, multi-zone support | Draft state, version history, duplicate/copy workflows, randomized playback, publish acknowledgements |
+| Channels and scheduling | Reusable channels, playlist priority, recurring schedules, calendar, temporary casts, expiry | Preview before publish, explicit draft/publish/discard, conflict resolution and richer recurrence/availability rules |
+| Apps and integrations | Native Pulse and JSON feeds, live web dashboards | Documented connector framework, OAuth integrations, Microsoft 365/Google Workspace/calendar/social/streaming connectors, connection health and credential renewal |
+| Publishing and broadcast | Immediate content changes, per-screen assignment and temporary override | Approval queue, targeted announcements/emergency broadcast, audience/location targeting, staged rollout and confirmation |
+| People and governance | Admin/editor/viewer/group-member roles, group-scoped screen access, invitations, audit log | Spaces/location scope across screens and content; creator/publisher/manager permissions; approval rules; SSO and optional custom roles |
+| Operations and proof | Reported playback transitions, history, CSV, screen health timeline, feed errors | Aggregated proof-of-play, delivery acknowledgement, scheduled reports, operational dashboards and configurable alert routing |
+| Player fleet lifecycle | Android TV APK, offline cache, autostart, sync/restart, diagnostics | Managed kiosk/device-owner mode, signed update channels, staged rollout, rollback/recovery, broader hardware support and remote device management |
+| Extensibility | Supabase-backed player APIs and protected integrations | Versioned public API/webhooks, custom app SDK/runtime, connector documentation, organization audit export |
+
+## Delivery sequence
+
+1. **Safe publishing:** separate working changes from live content; preview a channel; publish atomically; retain the last published version; restore or discard drafts; show which screens acknowledged the new version.
+2. **Locations and governance:** introduce spaces as a real access boundary for screens, channels, playlists, media, and team membership; preserve existing groups as labels/collections during migration.
+3. **Creation and media reliability:** resumable uploads, replacement/version history, native layouts/templates, and a clear preview for the target TV aspect ratio.
+4. **Broadcast and workflow:** approval states, publisher permissions, emergency/temporary announcements, target selection, expiry, and delivery receipts.
+5. **Integrations and APIs:** connector contract, credential lifecycle, health diagnostics, prioritized OAuth integrations, webhooks, and public API documentation.
+6. **Fleet operations and reporting:** device settings where Android permits them, managed kiosk deployment, safe player updates, proof-of-play aggregates, exports, and alert routing.
+
+## Product guarantees
+
+- Draft edits never reach players until published.
+- Publishing is atomic from a player's point of view and leaves its previous valid version available offline.
+- The admin UI distinguishes saved, published, delivered, and currently reported playback states.
+- A player screenshot is evidence of what its app rendered at capture time; it does not prove the physical panel was visible or powered.
+- Access boundaries are enforced by database policies, not only by hiding UI controls.
+- Credentials for connected systems remain server-side and are never embedded in a public page, player URL, or APK.
+- Device management claims are limited to controls supported by the actual TV hardware, Android version, and provisioning mode.
+
+## References
+
+- [ScreenCloud product features](https://screencloud.com/features)
+- [ScreenCloud Studio channels](https://help.screencloud.com/en/articles/10120125-screencloud-studio-channels)
+- [Channels setup and scheduling](https://help.screencloud.com/en/articles/10110358-channels-setup-guide-scheduling-content-using-layouts-and-adding-music-to-your-screens)
+- [ScreenCloud media library](https://help.screencloud.com/en/articles/10120107-screencloud-studio-media-library)
+- [People, groups, and spaces](https://help.screencloud.com/en/articles/10120942-people-groups-and-spaces-managing-users-teams-with-screencloud)
+- [Digital signage device management](https://help.screencloud.com/en/articles/12569847-what-are-screencloud-s-capabilities-for-managing-and-controlling-tv-displays-across-locations-and-devices)

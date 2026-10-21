@@ -2,6 +2,8 @@
 
 Signage Studio should cover the core jobs handled by mature digital-signage platforms while keeping its own product identity and implementation. The target is functional coverage, not a copy of ScreenCloud's branding, source code, or proprietary assets.
 
+See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the researched capability map, delivery sequence, and product guarantees. The immediate development track is safe publishing: drafts, preview, atomic publish, restore/discard, and screen delivery acknowledgements.
+
 ## Current foundation
 
 - Native Android TV player with pairing, heartbeat, offline playback, auto-start, remote sync/restart, live content feeds, multi-zone layouts, schedules, and temporary screen casts.
