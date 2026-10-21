@@ -17,12 +17,16 @@ create table if not exists public.media_library (
   body text not null default '',
   source_url text,
   duration_seconds integer not null default 30 check (duration_seconds between 5 and 600),
+  refresh_interval_seconds integer not null default 30,
   tags text[] not null default '{}',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 create index if not exists media_library_title_idx on public.media_library using gin (to_tsvector('simple', title));
 create index if not exists media_library_tags_idx on public.media_library using gin (tags);
+alter table public.media_library add column if not exists refresh_interval_seconds integer not null default 30;
+alter table public.media_library drop constraint if exists media_library_refresh_interval_check;
+alter table public.media_library add constraint media_library_refresh_interval_check check (refresh_interval_seconds between 10 and 3600);
 
 create table if not exists public.channels (
   id uuid primary key default gen_random_uuid(),
@@ -152,6 +156,7 @@ create table if not exists public.slides (
   source_url text,
   library_asset_id uuid references public.media_library(id) on delete set null,
   duration_seconds integer not null default 15 check (duration_seconds between 5 and 600),
+  refresh_interval_seconds integer not null default 30,
   sort_order integer not null default 0,
   is_active boolean not null default true,
   active_from timestamptz,
@@ -162,6 +167,9 @@ create table if not exists public.slides (
   created_at timestamptz not null default now(),
   constraint slides_content_owner_check check ((screen_id is null) <> (playlist_id is null))
 );
+alter table public.slides add column if not exists refresh_interval_seconds integer not null default 30;
+alter table public.slides drop constraint if exists slides_refresh_interval_check;
+alter table public.slides add constraint slides_refresh_interval_check check (refresh_interval_seconds between 10 and 3600);
 
 create index if not exists slides_library_asset_idx on public.slides(library_asset_id) where library_asset_id is not null;
 create or replace function public.sync_media_library_references()
@@ -172,7 +180,8 @@ set search_path = public
 as $$
 begin
   update public.slides
-  set kind = new.kind, title = new.title, body = new.body, source_url = new.source_url
+  set kind = new.kind, title = new.title, body = new.body, source_url = new.source_url,
+      refresh_interval_seconds = new.refresh_interval_seconds
   where library_asset_id = new.id;
   return new;
 end;
@@ -180,7 +189,7 @@ $$;
 revoke all on function public.sync_media_library_references() from public;
 drop trigger if exists sync_media_library_references on public.media_library;
 create trigger sync_media_library_references
-  after update of kind, title, body, source_url on public.media_library
+  after update of kind, title, body, source_url, refresh_interval_seconds on public.media_library
   for each row execute function public.sync_media_library_references();
 
 -- Upgrade existing installations in place.

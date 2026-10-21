@@ -54,6 +54,7 @@ class MainActivity : Activity() {
     private var zoneVideo: VideoView? = null
     private var zoneWebView: WebView? = null
     private var refreshTask: Runnable? = null
+    private var feedRefreshTask: Runnable? = null
     private var advanceTask: Runnable? = null
     private var clockTask: Runnable? = null
     private var heartbeatTask: Runnable? = null
@@ -314,6 +315,8 @@ class MainActivity : Activity() {
         slideGeneration++
         advanceTask?.let(handler::removeCallbacks)
         clockTask?.let(handler::removeCallbacks)
+        feedRefreshTask?.let(handler::removeCallbacks)
+        feedRefreshTask = null
         playerVideo?.stopPlayback()
         dashboardView?.stopLoading()
         dashboardView?.destroy()
@@ -739,8 +742,25 @@ class MainActivity : Activity() {
     private fun showFeed(item: JSONObject) {
         val generation = slideGeneration
         val title = item.optString("title")
-        val source = item.optString("source_url")
         showMessage(title.ifBlank { "Informationsflöde" }, "Hämtar aktuell information …")
+        fetchFeed(item, generation, refreshSecondaryZone = true)
+
+        val slideId = item.optString("id")
+        val intervalMillis = item.optInt("refresh_interval_seconds", 30).coerceIn(10, 3600) * 1000L
+        val refresh = object : Runnable {
+            override fun run() {
+                if (generation != slideGeneration || currentSlide?.optString("id") != slideId) return
+                fetchFeed(item, generation)
+                handler.postDelayed(this, intervalMillis)
+            }
+        }
+        feedRefreshTask = refresh
+        handler.postDelayed(refresh, intervalMillis)
+    }
+
+    private fun fetchFeed(item: JSONObject, generation: Int, refreshSecondaryZone: Boolean = false) {
+        val title = item.optString("title")
+        val source = item.optString("source_url")
         worker.execute {
             val raw = try {
                 val key = "feed_${sha256(source)}"
@@ -775,7 +795,7 @@ class MainActivity : Activity() {
                         else -> raw?.let(::renderFeed).orEmpty()
                     }
                     reportHeartbeat(item, title.ifBlank { "Informationsflöde" }, currentBody, "feed", source)
-                    applyMultiZoneLayout(item)
+                    if (refreshSecondaryZone) applyMultiZoneLayout(item)
                 }
             }
         }
@@ -1091,8 +1111,11 @@ class MainActivity : Activity() {
     }
 
     private fun showOperatingHoursScreen() {
+        slideGeneration++
         advanceTask?.let(handler::removeCallbacks)
         clockTask?.let(handler::removeCallbacks)
+        feedRefreshTask?.let(handler::removeCallbacks)
+        feedRefreshTask = null
         playerVideo?.stopPlayback()
         dashboardView?.stopLoading()
         dashboardView?.destroy()
@@ -1198,6 +1221,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         advanceTask?.let(handler::removeCallbacks)
         clockTask?.let(handler::removeCallbacks)
+        feedRefreshTask?.let(handler::removeCallbacks)
         refreshTask?.let(handler::removeCallbacks)
         heartbeatTask?.let(handler::removeCallbacks)
         scheduleTask?.let(handler::removeCallbacks)

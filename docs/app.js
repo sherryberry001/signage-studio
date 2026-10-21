@@ -301,6 +301,10 @@ $('#channelManagementList').addEventListener('click', async event => {
 
 $('#mediaSearch').addEventListener('input', renderMediaLibrary);
 
+$('#mediaLibraryForm [name="kind"]').addEventListener('change', event => {
+  $('#mediaLibraryForm .feed-refresh-setting').classList.toggle('hidden', event.target.value !== 'feed');
+});
+
 $('#mediaLibraryForm').addEventListener('submit', async event => {
   event.preventDefault();
   if (!['admin', 'editor'].includes(currentRole)) return;
@@ -321,9 +325,12 @@ $('#mediaLibraryForm').addEventListener('submit', async event => {
   if (['web', 'feed', 'video'].includes(kind) && !/^https?:\/\//i.test(source_url)) return toast('Ange en giltig HTTP- eller HTTPS-källa.', true);
   if (kind === 'text' && !body) return toast('Skriv texten som ska sparas i biblioteket.', true);
   const tags = [...new Set(String(values.get('tags') || '').split(',').map(tag => tag.trim().toLocaleLowerCase('sv-SE')).filter(Boolean))];
-  const { error } = await supabase.from('media_library').insert({ kind, title: String(values.get('title') || '').trim(), body, source_url: source_url || null, tags });
+  const refresh_interval_seconds = kind === 'feed' ? Number(values.get('refresh_interval_seconds') || 30) : 30;
+  if (kind === 'feed' && (!Number.isInteger(refresh_interval_seconds) || refresh_interval_seconds < 10 || refresh_interval_seconds > 3600)) return toast('Uppdateringsintervallet ska vara 10–3600 sekunder.', true);
+  const { error } = await supabase.from('media_library').insert({ kind, title: String(values.get('title') || '').trim(), body, source_url: source_url || null, tags, refresh_interval_seconds });
   if (error) return toast(error.message, true);
   form.reset();
+  $('#mediaLibraryForm [name="kind"]').dispatchEvent(new Event('change'));
   toast('Innehållet sparades i biblioteket.');
   await loadScreens();
 });
@@ -608,7 +615,7 @@ function renderMediaLibrary() {
   list.replaceChildren(...results.map(item => {
     const row = document.createElement('article');
     row.className = 'media-library-row';
-    row.innerHTML = `<div class="media-library-main"><div class="media-library-detail"><strong>${esc(item.title)}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s ${item.tags?.length ? `· ${item.tags.map(tag => `#${esc(tag)}`).join(' ')}` : ''}</span><small>${esc(item.source_url || item.body || '')}</small></div><details class="media-library-edit" ${['admin','editor'].includes(currentRole) ? '' : 'hidden'}><summary>Redigera</summary><form data-library-edit="${esc(item.id)}"><input name="title" maxlength="120" value="${esc(item.title)}" required aria-label="Namn" /><input name="source_url" type="url" value="${esc(item.source_url || '')}" placeholder="Källans URL" aria-label="Källans URL" /><textarea name="body" maxlength="1200" placeholder="Textinnehåll" aria-label="Textinnehåll">${esc(item.body || '')}</textarea><input name="tags" maxlength="200" value="${esc((item.tags || []).join(', '))}" placeholder="Taggar, separerade med komma" aria-label="Taggar" /><button class="button ghost small" type="submit">Spara ändringar</button></form></details></div><div class="media-library-actions"><select aria-label="Välj spellista för ${esc(item.title)}" data-library-playlist>${options}</select><button class="button ghost small" type="button" data-library-add="${esc(item.id)}" ${['admin','editor'].includes(currentRole) ? '' : 'disabled'}>Lägg till</button><button class="icon-button delete" type="button" aria-label="Ta bort ${esc(item.title)}" data-library-delete="${esc(item.id)}" ${currentRole === 'admin' || currentRole === 'editor' ? '' : 'hidden'}>×</button></div>`;
+    row.innerHTML = `<div class="media-library-main"><div class="media-library-detail"><strong>${esc(item.title)}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s${item.kind === 'feed' ? ` · hämtas var ${item.refresh_interval_seconds || 30}s` : ''} ${item.tags?.length ? `· ${item.tags.map(tag => `#${esc(tag)}`).join(' ')}` : ''}</span><small>${esc(item.source_url || item.body || '')}</small></div><details class="media-library-edit" ${['admin','editor'].includes(currentRole) ? '' : 'hidden'}><summary>Redigera</summary><form data-library-edit="${esc(item.id)}"><input name="title" maxlength="120" value="${esc(item.title)}" required aria-label="Namn" /><input name="source_url" type="url" value="${esc(item.source_url || '')}" placeholder="Källans URL" aria-label="Källans URL" /><textarea name="body" maxlength="1200" placeholder="Textinnehåll" aria-label="Textinnehåll">${esc(item.body || '')}</textarea><input name="tags" maxlength="200" value="${esc((item.tags || []).join(', '))}" placeholder="Taggar, separerade med komma" aria-label="Taggar" />${item.kind === 'feed' ? `<label class="feed-refresh-setting">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="${item.refresh_interval_seconds || 30}" required /></label>` : ''}<button class="button ghost small" type="submit">Spara ändringar</button></form></details></div><div class="media-library-actions"><select aria-label="Välj spellista för ${esc(item.title)}" data-library-playlist>${options}</select><button class="button ghost small" type="button" data-library-add="${esc(item.id)}" ${['admin','editor'].includes(currentRole) ? '' : 'disabled'}>Lägg till</button><button class="icon-button delete" type="button" aria-label="Ta bort ${esc(item.title)}" data-library-delete="${esc(item.id)}" ${currentRole === 'admin' || currentRole === 'editor' ? '' : 'hidden'}>×</button></div>`;
     return row;
   }));
   if (!results.length) list.innerHTML = '<div class="slide-sub">Inget innehåll matchar sökningen.</div>';
@@ -623,7 +630,9 @@ function renderMediaLibrary() {
     if (['web', 'feed', 'video'].includes(asset.kind) && !/^https?:\/\//i.test(source_url)) return toast('Ange en giltig HTTP- eller HTTPS-källa.', true);
     if (asset.kind === 'text' && !body) return toast('Textinnehållet får inte vara tomt.', true);
     const tags = [...new Set(String(values.get('tags') || '').split(',').map(tag => tag.trim().toLocaleLowerCase('sv-SE')).filter(Boolean))];
-    const { error } = await supabase.from('media_library').update({ title, source_url: source_url || null, body, tags, updated_at: new Date().toISOString() }).eq('id', id);
+    const refresh_interval_seconds = asset.kind === 'feed' ? Number(values.get('refresh_interval_seconds')) : asset.refresh_interval_seconds || 30;
+    if (asset.kind === 'feed' && (!Number.isInteger(refresh_interval_seconds) || refresh_interval_seconds < 10 || refresh_interval_seconds > 3600)) return toast('Uppdateringsintervallet ska vara 10–3600 sekunder.', true);
+    const { error } = await supabase.from('media_library').update({ title, source_url: source_url || null, body, tags, refresh_interval_seconds, updated_at: new Date().toISOString() }).eq('id', id);
     if (error) return toast(error.message, true);
     toast('Biblioteksposten och dess spellistereferenser uppdaterades.');
     await loadScreens();
@@ -635,7 +644,7 @@ function renderMediaLibrary() {
     const asset = mediaLibrary.find(item => item.id === button.dataset.libraryAdd);
     const { data: last, error: orderError } = await supabase.from('slides').select('sort_order').eq('playlist_id', playlist_id).order('sort_order', { ascending: false }).limit(1).maybeSingle();
     if (orderError) return toast(orderError.message, true);
-    const { error } = await supabase.from('slides').insert({ playlist_id, screen_id: null, library_asset_id: asset.id, kind: asset.kind, title: asset.title, body: asset.body, source_url: asset.source_url, duration_seconds: asset.duration_seconds, sort_order: (last?.sort_order ?? -1) + 1, is_active: true });
+    const { error } = await supabase.from('slides').insert({ playlist_id, screen_id: null, library_asset_id: asset.id, kind: asset.kind, title: asset.title, body: asset.body, source_url: asset.source_url, duration_seconds: asset.duration_seconds, refresh_interval_seconds: asset.refresh_interval_seconds || 30, sort_order: (last?.sort_order ?? -1) + 1, is_active: true });
     if (error) return toast(error.message, true);
     toast(`“${asset.title}” lades till i spellistan.`);
     await loadScreens();
@@ -926,7 +935,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
       ${channelSlides.length ? `<details class="screen-channel-content"><summary>Innehåll från skärmens kanaler · ${channelSlides.length} objekt</summary><div class="playlist">${channelSlides.map(slide => `<div class="slide-row"><div class="slide-thumb">${slide.kind === 'video' ? '▶' : slide.kind === 'feed' || slide.kind === 'web' ? '↗' : slide.kind === 'clock' ? '◷' : 'T'}</div><div><div class="slide-title">${esc(slide.title || kindLabel(slide.kind))}</div><div class="slide-sub">${esc(kindLabel(slide.kind))} · ${esc(playlists.find(item => item.id === slide.playlist_id)?.name || 'spellista')}</div></div><div class="slide-buttons"><button class="button ghost small channel-show-now" data-id="${esc(slide.id)}" ${canEdit ? '' : 'hidden'}>Visa nu</button></div></div>`).join('')}</div></details>` : ''}
       <div class="slide-add-grid ${canEdit ? '' : 'hidden'}">
         <div class="add-box"><h3>Textmeddelande</h3><form class="text-slide-form add-text"><input name="title" maxlength="80" placeholder="Rubrik" required /><textarea name="body" maxlength="1200" placeholder="Meddelande" required></textarea><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="15" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Publicera text</button></div>${scheduleFields()}</form></div>
-        <div class="add-box"><h3>Video eller live-data</h3><form class="text-slide-form add-source"><select name="kind"><option value="video">Video (MP4-länk eller fil)</option><option value="feed">Live-data / JSON-feed (API)</option></select><input name="title" maxlength="80" placeholder="Namn på innehåll" required /><input name="url" type="url" placeholder="https://… eller intern API-adress" /><label class="file-label">För video kan du också välja MP4-fil <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime" /></label><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="30" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till</button></div>${scheduleFields()}</form></div>
+        <div class="add-box"><h3>Video eller live-data</h3><form class="text-slide-form add-source"><select name="kind"><option value="video">Video (MP4-länk eller fil)</option><option value="feed">Live-data / JSON-feed (API)</option></select><label class="feed-refresh-setting hidden">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="30" /></label><input name="title" maxlength="80" placeholder="Namn på innehåll" required /><input name="url" type="url" placeholder="https://… eller intern API-adress" /><label class="file-label">För video kan du också välja MP4-fil <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime" /></label><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="30" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till</button></div>${scheduleFields()}</form></div>
         <div class="add-box"><h3>Klocka & datum</h3><form class="text-slide-form add-clock"><input name="title" maxlength="80" placeholder="Rubrik, till exempel Välkommen" /><input name="body" maxlength="180" placeholder="Valfri underrad" /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="20" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till klocka</button></div>${scheduleFields()}</form></div>
         <div class="add-box"><h3>Webbsida eller live-dashboard</h3><form class="text-slide-form add-web"><input name="title" maxlength="80" placeholder="Namn på sidan" required /><input name="url" type="url" placeholder="https://…" required /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="60" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till sida</button></div>${scheduleFields()}</form></div>
       </div>
@@ -1049,7 +1058,11 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   });
   card.querySelector('.add-text').addEventListener('submit', event => addSlide(event, screen, 'text'));
   card.querySelector('.add-clock').addEventListener('submit', event => addSlide(event, screen, 'clock'));
-  card.querySelector('.add-source').addEventListener('submit', event => addSource(event, screen, slides.length));
+  const sourceForm = card.querySelector('.add-source');
+  sourceForm.querySelector('[name="kind"]').addEventListener('change', event => {
+    sourceForm.querySelector('.feed-refresh-setting').classList.toggle('hidden', event.target.value !== 'feed');
+  });
+  sourceForm.addEventListener('submit', event => addSource(event, screen, slides.length));
   card.querySelector('.add-web').addEventListener('submit', event => addWeb(event, screen));
   card.querySelectorAll('[data-slide-action]').forEach(button => button.addEventListener('click', () => slideAction(button, screen, slides)));
   card.querySelectorAll('.channel-show-now').forEach(button => button.addEventListener('click', () => setForcedSlide(screen, button.dataset.id)));
@@ -1167,9 +1180,13 @@ async function addSource(event, screen) {
     source_url = supabase.storage.from('signage-assets').getPublicUrl(path).data.publicUrl;
   }
   if (!source_url) return toast('Ange en videolänk, en feed-URL eller välj en videofil.', true);
-  const { error } = await supabase.from('slides').insert({ ...contentOwner(screen), kind, title: String(f.get('title') || '').trim(), source_url, duration_seconds: Number(f.get('duration')) || 30, sort_order: await nextOrder(screen), is_active: true, ...schedule });
+  const refresh_interval_seconds = kind === 'feed' ? Number(f.get('refresh_interval_seconds') || 30) : 30;
+  if (kind === 'feed' && (!Number.isInteger(refresh_interval_seconds) || refresh_interval_seconds < 10 || refresh_interval_seconds > 3600)) return toast('Uppdateringsintervallet ska vara 10–3600 sekunder.', true);
+  const { error } = await supabase.from('slides').insert({ ...contentOwner(screen), kind, title: String(f.get('title') || '').trim(), source_url, duration_seconds: Number(f.get('duration')) || 30, refresh_interval_seconds, sort_order: await nextOrder(screen), is_active: true, ...schedule });
   if (error) return toast(error.message, true);
-  form.reset(); toast('Innehållet publicerades.'); await loadScreens();
+  form.reset();
+  form.querySelector('[name="kind"]').dispatchEvent(new Event('change'));
+  toast('Innehållet publicerades.'); await loadScreens();
 }
 
 async function slideAction(button, screen, slides) {
