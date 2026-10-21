@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261113-screen-identity" />
-    <script type="module" src="./app.js?v=20261113-screen-identity"></script>
+    <link rel="stylesheet" href="./style.css?v=20261115-screen-publication" />
+    <script type="module" src="./app.js?v=20261115-screen-publication"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -62,18 +62,18 @@
         <section class="screen-groups-panel" data-workspace-panel="screens"><div class="screen-groups-heading"><div><strong>Skärmgrupper</strong><span>Samla skärmar per plats eller team. Gruppfilter fungerar ihop med status och sökning.</span></div><form id="createScreenGroupForm" class="create-screen-group-form"><input name="name" maxlength="64" placeholder="Ny grupp, t.ex. Stockholm" required /><input name="description" maxlength="160" placeholder="Beskrivning (valfritt)" /><button class="button ghost small" type="submit">＋ Skapa grupp</button></form></div><div id="screenGroupList" class="screen-group-list"></div></section>
         <div id="bulkScreenActions" class="bulk-screen-actions hidden" data-workspace-panel="screens"><strong id="selectedScreenCount">0 valda</strong><span>Kommandon skickas bara till aktiva skärmar.</span><label class="bulk-group-assignment admin-only">Flytta till<select id="bulkScreenGroup"><option value="__skip__">Välj grupp</option><option value="">Ingen grupp</option></select></label><button id="assignSelectedGroup" class="button ghost small admin-only" type="button">Flytta valda</button><button class="button ghost small" type="button" data-bulk-command="sync_now">Synka valda</button><button class="button ghost small" type="button" data-bulk-command="restart_player">Starta om valda</button><button id="clearScreenSelection" class="button ghost small" type="button">Rensa val</button></div>
         <div class="playlist-library-bar" data-workspace-panel="content">
-          <div><strong>Återanvändbara spellistor</strong><span>Skapa en gång och tilldela till flera skärmar.</span></div>
+          <div><strong>Återanvändbara spellistor</strong><span>Skapa en gång och tilldela till flera skärmar. Ändringar sparas som utkast tills de publiceras på skärmkorten.</span></div>
           <form id="createPlaylistForm"><input id="playlistName" maxlength="80" placeholder="Namn på ny spellista" required /><button class="button ghost" type="submit">＋ Skapa spellista</button></form>
         </div>
         <div id="playlistManagementList" class="playlist-management-list" data-workspace-panel="content"></div>
         <div class="playlist-library-bar channel-library-bar" data-workspace-panel="channels">
-          <div><strong>Kanaler & scheman</strong><span>Bygg en kanal av flera spellistor med egna tider och lägg den på de skärmar som ska använda den.</span></div>
+          <div><strong>Kanaler & scheman</strong><span>Bygg en kanal av flera spellistor med egna tider och lägg den på skärmarna. Publicera från skärmkortet när utkastet är klart.</span></div>
           <form id="createChannelForm"><input id="channelName" maxlength="80" placeholder="Namn på kanal" required /><select id="channelPlaylist" required aria-label="Spellista för kanal"><option value="">Välj spellista</option></select><button class="button ghost" type="submit">＋ Skapa kanal</button></form>
         </div>
         <section class="channel-calendar-panel" data-workspace-panel="channels"><div class="channel-calendar-heading"><div><strong>Veckoschema</strong><span>Överblick över kanalernas visningstider per skärm. Spelaren använder sin lokala klocka; kalendern visas i din tidszon.</span></div><div class="channel-calendar-controls"><button id="channelCalendarPrevious" class="button ghost small" type="button" aria-label="Föregående vecka">←</button><button id="channelCalendarToday" class="button ghost small" type="button">Den här veckan</button><button id="channelCalendarNext" class="button ghost small" type="button" aria-label="Nästa vecka">→</button><select id="channelCalendarScreen" aria-label="Filtrera veckoschema per skärm"><option value="all">Alla skärmar</option></select></div></div><div id="channelCalendarRange" class="channel-calendar-range"></div><div id="channelCalendarGrid" class="channel-calendar-grid" aria-live="polite"></div></section>
         <div id="channelManagementList" class="channel-management-list" data-workspace-panel="channels"></div>
         <section id="mediaLibraryPanel" class="team-panel media-library-panel" data-workspace-panel="content">
-          <div class="team-heading"><div><strong>Innehållsbibliotek</strong><span>Spara länkar, live-data, text, bilder och video en gång. Lägg sedan till dem i valfri spellista.</span></div><input id="mediaSearch" type="search" placeholder="Sök namn eller tagg…" aria-label="Sök i innehållsbiblioteket" /></div>
+          <div class="team-heading"><div><strong>Innehållsbibliotek</strong><span>Spara länkar, live-data, text, bilder och video en gång. Lägg sedan till dem i valfri spellista. Publicera sedan utkastet från skärmkortet.</span></div><input id="mediaSearch" type="search" placeholder="Sök namn eller tagg…" aria-label="Sök i innehållsbiblioteket" /></div>
           <form id="mediaLibraryForm" class="media-library-form">
             <select name="kind" aria-label="Innehållstyp"><option value="web">Webbsida / dashboard</option><option value="feed">JSON-feed</option><option value="image">Bild</option><option value="video">Video</option><option value="text">Textmeddelande</option><option value="clock">Klocka & datum</option></select>
             <input name="title" maxlength="120" placeholder="Namn på innehållet" required />
@@ -113,6 +113,7 @@
           <div id="integrationSummary" class="playback-summary"></div>
           <div id="integrationList" class="integration-list" aria-live="polite"></div>
         </section>
+        <section class="publish-guidance" data-workspace-panel="screens"><strong>Publicera när du är redo</strong><span>Innehåll, spellistor, kanalscheman och skärmlayouter sparas som utkast. Välj <b>Publicera</b> på varje skärm när innehållet är granskat; då skapas en version och synk köas till TV:n.</span></section>
         <div id="screenList" class="screen-list" data-workspace-panel="screens"></div>
         <div id="emptyState" class="empty-state hidden" data-workspace-panel="screens"><div class="empty-icon">▣</div><h2>Din första skärm börjar här</h2><p>Skapa en skärm, koppla TV-appen med parkopplingskoden och lägg till ditt första innehåll.</p></div>
       </section>

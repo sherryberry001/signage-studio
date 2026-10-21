@@ -16,8 +16,8 @@ See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the researched capability
 | Area | Current coverage | Next product milestone |
 | --- | --- | --- |
 | Screens and devices | Pairing/recovery, stable player identity, unique active names, groups, online status, previews, bulk actions, remote restart/sync, device diagnostics, scheduled online/offline history, and downloadable support bundles | Reconcile legacy duplicate profiles; add guided remote troubleshooting and configurable alert thresholds |
-| Content | Text, image, video, web links, JSON feeds, reusable library | Approval, robust upload recovery, reusable native app instances |
-| Playlists and channels | Reusable playlists with atomic drag or keyboard ordering, recurring schedules, priority, multi-zone, weekly per-screen channel calendar | Preview before publish, playlist-level calendar entries |
+| Content | Text, image, video, web links, JSON feeds, reusable library, expiring media, versioned per-screen publishing snapshots | Approval, robust upload recovery, reusable native app instances |
+| Playlists and channels | Reusable playlists with atomic drag or keyboard ordering, recurring schedules, priority, multi-zone, weekly per-screen channel calendar, per-screen publish versions and queued player sync | Draft preview/restore, approval and playlist-level calendar entries |
 | Live data and apps | Native Pulse/JSON feed and web dashboard support; reusable Pulse connections with protected credentials; per-screen feed status, HTTP/network errors, last success and source host | Expand connector catalog with OAuth-backed business apps, refreshable credentials, and setup health checks |
 | Remote screen operations | Set content, temporary cast, sync, restart, and on-demand screenshot capture | Remote settings, support bundle, guided troubleshooting |
 | Team and organization | Roles, screen groups, group-scoped access, audit log | Spaces/locations, granular content permissions and activity export |

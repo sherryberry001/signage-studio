@@ -351,7 +351,7 @@ $('#channelManagementList').addEventListener('submit', async event => {
   if (orderError) return toast(orderError.message, true);
   const { error } = await supabase.from('channel_playlists').insert({ channel_id, playlist_id, sort_order: (last?.sort_order ?? -1) + 1, priority: Number(values.get('priority')) || 100, ...schedule });
   if (error) return toast(error.message, true);
-  toast('Spellistan och dess visningsschema lades till i kanalen.');
+  toast('Spellistan och schemat sparades som utkast. Publicera från varje berörd skärm när du är klar.');
   await loadScreens();
 });
 
@@ -480,6 +480,7 @@ async function loadScreens() {
     { data: channelPlaylistData, error: channelPlaylistError },
     { data: channelScheduleData, error: channelScheduleError },
     { data: commandData, error: commandError },
+    { data: publicationData, error: publicationError },
     { data: mediaData, error: mediaError },
     { data: groupData, error: groupError },
     { data: groupMemberData, error: groupMemberError }
@@ -491,6 +492,7 @@ async function loadScreens() {
     supabase.from('channel_playlists').select('*').order('channel_id').order('sort_order'),
     supabase.from('screen_channel_schedules').select('*').order('priority', { ascending: true }),
     supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100),
+    supabase.from('screen_publications').select('screen_id,revision,published_at').order('revision', { ascending: false }),
     supabase.from('media_library').select('*').order('updated_at', { ascending: false }).limit(300),
     supabase.from('screen_groups').select('*').order('name', { ascending: true }),
     supabase.from('screen_group_members').select('id,group_id,user_id,created_at').order('created_at', { ascending: true })
@@ -503,6 +505,7 @@ async function loadScreens() {
   if (channelPlaylistError) return toast(channelPlaylistError.message, true);
   if (channelScheduleError) return toast(channelScheduleError.message, true);
   if (commandError) return toast(commandError.message, true);
+  if (publicationError) return toast(publicationError.message, true);
   if (mediaError && mediaError.code !== '42P01') return toast(mediaError.message, true);
   if (groupError) return toast(groupError.message, true);
   if (groupMemberError) return toast(groupMemberError.message, true);
@@ -557,6 +560,10 @@ async function loadScreens() {
   channelPlaylists = channelPlaylistData || [];
   channelSchedules = channelScheduleData || [];
   screenCommands = commandData || [];
+  const latestPublications = new Map();
+  (publicationData || []).forEach(publication => {
+    if (!latestPublications.has(publication.screen_id)) latestPublications.set(publication.screen_id, publication);
+  });
   mediaLibrary = mediaData || [];
   updateChannelControls();
   updateChannelManagement();
@@ -580,7 +587,7 @@ async function loadScreens() {
     const screenChannelIds = new Set(channelSchedules.filter(item => item.screen_id === screen.id).map(item => item.channel_id));
     const screenChannelPlaylistIds = new Set(channelPlaylists.filter(item => screenChannelIds.has(item.channel_id)).map(item => item.playlist_id));
     const screenChannelSlides = (channelSlideData || []).filter(item => screenChannelPlaylistIds.has(item.playlist_id));
-    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(String(screen.name || '').trim().toLocaleLowerCase('sv-SE')) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides);
+    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(String(screen.name || '').trim().toLocaleLowerCase('sv-SE')) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides, latestPublications.get(screen.id));
   });
   const grouped = new Map();
   screens.forEach((screen, index) => {
@@ -1679,7 +1686,7 @@ function scheduleFields() {
   return `<div class="schedule-fields"><div class="weekday-picker" aria-label="Återkommande veckodagar">${days.map(([value, label]) => `<label><input type="checkbox" name="weekdays" value="${value}" /><span>${label}</span></label>`).join('')}</div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från datum och tid" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till datum och tid" /></div><div class="inline-fields"><input class="schedule-input" name="daily_from" type="time" aria-label="Visa dagligen från" /><input class="schedule-input" name="daily_until" type="time" aria-label="Visa dagligen till" /></div><span class="schedule-help">Valda dagar och klockslag återkommer varje vecka. Lämna tomt för alltid.</span></div>`;
 }
 
-function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, latestCommand = null, channelSlides = []) {
+function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, latestCommand = null, channelSlides = [], publication = null) {
   const canAdmin = currentRole === 'admin';
   const canEdit = canAdmin || currentRole === 'editor';
   const card = document.createElement('article');
@@ -1696,11 +1703,12 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   card.innerHTML = `
     <div class="screen-head">
       <div class="screen-title-wrap"><input class="screen-select ${canEdit ? '' : 'hidden'}" type="checkbox" ${selectedScreenIds.has(screen.id) ? 'checked' : ''} aria-label="Välj ${esc(screen.name)}" /><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${esc(screenGroup?.name || 'Ingen grupp')} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · möjlig dubblett (${sameNameCount} med samma namn)` : ''}</div></div></div>
-      <div class="screen-actions">${pending}<button class="button ghost small renew-pairing ${canAdmin ? '' : 'hidden'}">Ny kod</button><button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
+      <div class="screen-actions">${pending}<button class="button primary small publish-screen ${canEdit ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Publicera</button><button class="button ghost small renew-pairing ${canAdmin ? '' : 'hidden'}">Ny kod</button><button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
     </div>
+    <div class="screen-publication-state">Senast publicerad ${publication ? `version ${esc(publication.revision)} · ${esc(new Date(publication.published_at).toLocaleString('sv-SE'))}` : 'inte ännu'} · ändringar ligger som utkast tills du publicerar.</div>
     <div class="screen-status-row"><div class="screen-live-status ${isOnline(screen) ? 'online' : 'offline'}"><span class="status-indicator"></span><span class="status-label">${isOnline(screen) ? 'Online nu' : 'Offline'}</span><span class="last-seen">${screen.last_seen_at ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Spelaren har inte rapporterat ännu'}</span></div><div class="current-content ${isOnline(screen) ? '' : 'stale'}"><span class="current-content-label">VISAS JUST NU</span><strong class="current-title">${esc(isOnline(screen) ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt')}</strong><span class="current-kind">${esc(isOnline(screen) ? kindLabel(screen.current_kind) : 'Skärmen är offline')}</span><div class="current-preview"></div></div><div class="device-diagnostics">${renderDeviceDiagnostics(screen)}</div></div>
     <div class="screen-body">
-      <p class="pair-help">${screen.pair_code ? 'Öppna Signage Player på TV:n och skriv koden ovan. Koden kan bara användas en gång.' : 'TV:n är parkopplad. Nytt innehåll synkas automatiskt och sparas lokalt för offlinevisning.'}</p>
+      <p class="pair-help">${screen.pair_code ? 'Öppna Signage Player på TV:n och skriv koden ovan. Koden kan bara användas en gång.' : 'TV:n är parkopplad. Publicerat innehåll synkas till spelaren och sparas lokalt för offlinevisning.'}</p>
       <details class="screen-health-history"><summary>Drifthistorik</summary><div class="screen-health-events" data-screen-health-events>Öppna för att läsa skärmens senaste online- och offlinehändelser.</div></details>
       <label class="screen-group-assignment ${canAdmin ? '' : 'hidden'}">Skärmgrupp<select class="screen-group-select">${screenGroupOptions(screen.group_id || '')}</select><span>Använd grupper för att sortera skärmar efter plats eller team.</span></label>
       <form class="screen-operating-form ${canAdmin ? '' : 'hidden'}"><div class="operating-heading"><strong>Öppettider</strong><span>TV:n visar svart utanför tiderna men fortsätter vara ansluten. Tider följer TV:ns lokala klocka.</span></div><div class="operating-days">${operatingDays.map(([day, label]) => `<label><input type="checkbox" name="operating_weekdays" value="${day}" ${selectedOperatingDays.includes(day) ? 'checked' : ''} /><span>${label}</span></label>`).join('')}</div><div class="operating-times"><label>Från<input name="operating_start_time" type="time" value="${esc(screen.operating_start_time || '')}" /></label><label>Till<input name="operating_end_time" type="time" value="${esc(screen.operating_end_time || '')}" /></label></div><button class="button ghost small" type="submit">Spara öppettider</button></form>
@@ -1724,6 +1732,15 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     if (event.currentTarget.checked) selectedScreenIds.add(screen.id);
     else selectedScreenIds.delete(screen.id);
     updateBulkScreenActions();
+  });
+  card.querySelector('.publish-screen').addEventListener('click', async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    const { data: revision, error } = await supabase.rpc('publish_screen_content', { input_screen_id: screen.id });
+    button.disabled = false;
+    if (error) return toast(error.message, true);
+    toast(`Version ${revision} publicerades för “${screen.name}”. Synk köad till spelaren.`);
+    await loadScreens();
   });
   card.querySelector('.screen-group-select').addEventListener('change', async event => {
     const group_id = event.currentTarget.value || null;
@@ -1810,7 +1827,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     const playlist_id = event.currentTarget.value || null;
     const { error } = await supabase.from('screens').update({ playlist_id, forced_slide_id: null }).eq('id', screen.id);
     if (error) return toast(error.message, true);
-    toast(playlist_id ? 'Spellistan tilldelades skärmen.' : 'Skärmen använder sin egen spellista.');
+    toast(playlist_id ? 'Spellistan tilldelades som utkast. Publicera skärmen för att skicka ändringen till TV:n.' : 'Skärmen använder sin egen spellista som utkast. Publicera skärmen för att skicka ändringen till TV:n.');
     await loadScreens();
   });
   card.querySelector('.screen-layout-form').addEventListener('submit', async event => {
@@ -1822,7 +1839,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     if (layout_type !== 'single' && !layout_text && !zone_playlist_id) return toast('Välj en zonspellista eller skriv zontext.', true);
     const { error } = await supabase.from('screens').update({ layout_type, layout_text, zone_playlist_id }).eq('id', screen.id);
     if (error) return toast(error.message, true);
-    toast('Skärmlayouten och zonspellistan sparades och synkas till TV:n.');
+    toast('Skärmlayouten och zonspellistan sparades som utkast. Publicera skärmen för att skicka ändringen till TV:n.');
     await loadScreens();
   });
   card.querySelector('.channel-schedule-form').addEventListener('submit', async event => {
@@ -1834,7 +1851,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     if (assignedChannels.some(item => item.channel_id === f.get('channel_id'))) return toast('Den här kanalen är redan tilldelad. Ändra eller ta bort det befintliga schemat.', true);
     const { error } = await supabase.from('screen_channel_schedules').insert({ screen_id: screen.id, channel_id: String(f.get('channel_id')), priority: Number(f.get('priority')) || 100, ...values });
     if (error) return toast(error.message, true);
-    toast('Kanalschemat sparades. TV:n byter innehåll automatiskt.');
+    toast('Kanalschemat sparades som utkast. Publicera skärmen för att skicka schemat till TV:n.');
     await loadScreens();
   });
   card.querySelectorAll('.remove-channel-schedule').forEach(button => button.addEventListener('click', async () => {
