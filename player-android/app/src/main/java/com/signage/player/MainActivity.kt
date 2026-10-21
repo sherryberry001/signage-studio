@@ -543,9 +543,13 @@ class MainActivity : Activity() {
         }
         val eligibleIds = eligible.map { it.optString("id") }.toSet()
         val timedSelection = if (isSynchronizedPlayback()) synchronizedSelection(eligible) else null
-        val item = timedSelection?.first ?: (0 until slides.length()).map { (index + it) % slides.length() }
-            .mapNotNull { slides.optJSONObject(it) }
-            .firstOrNull { it.optString("id") in eligibleIds } ?: eligible[0]
+        val item = timedSelection?.first ?: if (isRandomPlayback()) {
+            randomSelection(eligible, currentSlide?.optString("id"))
+        } else {
+            (0 until slides.length()).map { (index + it) % slides.length() }
+                .mapNotNull { slides.optJSONObject(it) }
+                .firstOrNull { it.optString("id") in eligibleIds } ?: eligible[0]
+        }
         index = (0 until slides.length()).firstOrNull { slides.optJSONObject(it)?.optString("id") == item.optString("id") } ?: 0
         currentSlide = item
         currentTitle = item.optString("title").ifBlank { "Väntar på innehåll" }
@@ -601,7 +605,9 @@ class MainActivity : Activity() {
             if (scheduled.isEmpty()) showSecondaryZoneText(panel, copy, layout)
             else {
                 val timedSelection = if (isSynchronizedPlayback()) synchronizedSelection(scheduled) else null
-                val selected = timedSelection?.first ?: scheduled[zoneIndex.mod(scheduled.size)]
+                val selected = timedSelection?.first ?: if (isRandomPlayback()) {
+                    randomSelection(scheduled, null)
+                } else scheduled[zoneIndex.mod(scheduled.size)]
                 zoneIndex = scheduled.indexOfFirst { it.optString("id") == selected.optString("id") }.coerceAtLeast(0)
                 showSecondaryZoneSlide(panel, selected, layout, timedSelection?.second)
             }
@@ -766,8 +772,14 @@ class MainActivity : Activity() {
                         zoneIndex = available.indexOfFirst { it.optString("id") == timedSelection.first.optString("id") }.coerceAtLeast(0)
                         showSecondaryZoneSlide(container, timedSelection.first, layout, timedSelection.second)
                     } else {
-                        zoneIndex = (zoneIndex + 1) % available.size
-                        showSecondaryZoneSlide(container, available[zoneIndex], layout)
+                        val selected = if (isRandomPlayback()) {
+                            randomSelection(available, item.optString("id"))
+                        } else {
+                            zoneIndex = (zoneIndex + 1) % available.size
+                            available[zoneIndex]
+                        }
+                        zoneIndex = available.indexOfFirst { it.optString("id") == selected.optString("id") }.coerceAtLeast(0)
+                        showSecondaryZoneSlide(container, selected, layout)
                     }
                 } else if (zoneRoot === container) {
                     showSecondaryZoneText(container, item.optString("layout_text"), layout)
@@ -906,6 +918,15 @@ class MainActivity : Activity() {
     }
 
     private fun isSynchronizedPlayback(): Boolean = screenConfig.optString("playback_mode") == "sync"
+
+    private fun isRandomPlayback(): Boolean = screenConfig.optString("playback_mode") == "random"
+
+    private fun randomSelection(items: List<JSONObject>, currentId: String?): JSONObject {
+        val alternatives = if (items.size > 1 && !currentId.isNullOrBlank()) {
+            items.filterNot { it.optString("id") == currentId }
+        } else items
+        return alternatives.randomOrNull() ?: items.first()
+    }
 
     /** Derive the same cyclic item and next boundary on every player using the wall clock. */
     private fun synchronizedSelection(items: List<JSONObject>): Pair<JSONObject, Long>? {

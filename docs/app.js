@@ -2959,6 +2959,12 @@ function refreshDraftPreviewForTime() {
       .filter(item => isPreviewItemActive(item, draftPreviewAt))
       .map(item => ({ ...item, previewSource: 'Skärmens grundspellista' }));
   }
+  if (draftPreviewScreen.playback_mode === 'random') {
+    for (let i = draftPreviewItems.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [draftPreviewItems[i], draftPreviewItems[j]] = [draftPreviewItems[j], draftPreviewItems[i]];
+    }
+  }
   const forcedCastActive = draftPreviewScreen.forced_slide_id
     && (!draftPreviewScreen.forced_until || draftPreviewAt.getTime() < new Date(draftPreviewScreen.forced_until).getTime());
   if (draftPreviewScreen.layout_type !== 'single' && !forcedCastActive) {
@@ -2968,7 +2974,9 @@ function refreshDraftPreviewForTime() {
     draftPreviewZoneItemCount = zoneSlides.length;
     draftPreviewZoneItem = draftPreviewScreen.playback_mode === 'sync'
       ? synchronizedPreviewItem(zoneSlides, draftPreviewAt)
-      : zoneSlides[0] || null;
+      : draftPreviewScreen.playback_mode === 'random'
+        ? zoneSlides[Math.floor(Math.random() * zoneSlides.length)] || null
+        : zoneSlides[0] || null;
     draftPreviewZonePosition = Math.max(0, zoneSlides.findIndex(item => item.id === draftPreviewZoneItem?.id));
     if (!draftPreviewZoneItem) draftPreviewZoneText = String(draftPreviewScreen.layout_text || '').trim();
   }
@@ -3077,7 +3085,7 @@ function renderDraftPreviewItem() {
   caption.textContent = `${kindLabel(item.kind)} · ${Number(item.duration_seconds) || 0} sekunder`;
   frame.append(caption);
   stage.append(createDraftPreviewComposition(frame, generation));
-  position.textContent = `${draftPreviewIndex + 1} av ${draftPreviewItems.length} · ${previewTimeLabel}`;
+  position.textContent = `${draftPreviewIndex + 1} av ${draftPreviewItems.length}${draftPreviewScreen?.playback_mode === 'random' ? ' · slumpad ordning' : ''} · ${previewTimeLabel}`;
   previous.disabled = draftPreviewIndex === 0;
   next.disabled = draftPreviewIndex >= draftPreviewItems.length - 1;
   refresh.disabled = !['feed','web'].includes(item.kind) && !['feed','web'].includes(draftPreviewZoneItem?.kind);
@@ -3529,7 +3537,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
       <label class="screen-location-assignment ${canAdmin ? '' : 'hidden'}">Plats<select class="screen-location-select">${screenLocationOptions(screen.location_id || '')}</select><span>Platsmedlemmar får läsåtkomst till skärmens publicerade innehåll och historik.</span></label>
       <label class="screen-group-assignment ${canAdmin ? '' : 'hidden'}">Skärmgrupp<select class="screen-group-select">${screenGroupOptions(screen.group_id || '')}</select><span>Använd grupper för att sortera skärmar efter plats eller team.</span></label>
       <form class="screen-operating-form ${canAdmin ? '' : 'hidden'}"><div class="operating-heading"><strong>Öppettider</strong><span>TV:n visar svart utanför tiderna men fortsätter vara ansluten. Tider följer TV:ns lokala klocka.</span></div><div class="operating-days">${operatingDays.map(([day, label]) => `<label><input type="checkbox" name="operating_weekdays" value="${day}" ${selectedOperatingDays.includes(day) ? 'checked' : ''} /><span>${label}</span></label>`).join('')}</div><div class="operating-times"><label>Från<input name="operating_start_time" type="time" value="${esc(screen.operating_start_time || '')}" /></label><label>Till<input name="operating_end_time" type="time" value="${esc(screen.operating_end_time || '')}" /></label></div><button class="button ghost small" type="submit">Spara öppettider</button></form>
-      <label class="screen-playback-setting ${canAdmin ? '' : 'hidden'}">Uppspelningsläge<select class="screen-playback-mode"><option value="independent" ${screen.playback_mode !== 'sync' ? 'selected' : ''}>Fristående · starta lokalt</option><option value="sync" ${screen.playback_mode === 'sync' ? 'selected' : ''}>Synkad · gemensam tidslinje</option></select><span>Synka skärmar med samma aktiva innehållssekvens och schema. TV-enheterna behöver rätt klocka.</span></label>
+      <label class="screen-playback-setting ${canAdmin ? '' : 'hidden'}">Uppspelningsläge<select class="screen-playback-mode"><option value="independent" ${!['sync', 'random'].includes(screen.playback_mode) ? 'selected' : ''}>Fristående · ordnad rotation</option><option value="sync" ${screen.playback_mode === 'sync' ? 'selected' : ''}>Synkad · gemensam tidslinje</option><option value="random" ${screen.playback_mode === 'random' ? 'selected' : ''}>Slumpmässig · blanda innehållet</option></select><span>Slumpmässigt läge väljer nästa aktiva objekt utan att direkt upprepa det föregående. Synkat läge kräver rätt klocka på TV-enheterna.</span></label>
       <label class="screen-autostart-setting ${canAdmin ? '' : 'hidden'}"><span><strong>Starta spelaren när TV:n slås på</strong><small>Spelaren öppnas automatiskt efter omstart eller strömavbrott.</small></span><input class="screen-autostart" type="checkbox" ${screen.autostart_enabled !== false ? 'checked' : ''} aria-label="Starta Signage Player automatiskt vid TV-start" /></label>
       <label class="playlist-assignment ${canAdmin ? '' : 'hidden'}">Spellista för den här skärmen<select class="screen-playlist">${playlistOptions}</select><span>En spellista kan delas av flera skärmar.</span></label>
       <form class="screen-layout-form ${canAdmin ? '' : 'hidden'}"><label>Skärmlayout<select name="layout_type"><option value="single" ${screen.layout_type === 'single' ? 'selected' : ''}>En zon · fullskärm</option><option value="bottom_ticker" ${screen.layout_type === 'bottom_ticker' ? 'selected' : ''}>Huvudyta + ticker längst ned</option><option value="side_panel" ${screen.layout_type === 'side_panel' ? 'selected' : ''}>Huvudyta + sidopanel</option></select></label><label>Spellista i zon 2<select name="zone_playlist_id"><option value="">Visa zontext</option>${playlists.map(playlist => `<option value="${esc(playlist.id)}" ${playlist.id === screen.zone_playlist_id ? 'selected' : ''}>${esc(playlist.name)}</option>`).join('')}</select></label><label class="layout-text-label">Zontext<input name="layout_text" maxlength="500" value="${esc(screen.layout_text || '')}" placeholder="Visas om zonspellistan saknar aktivt innehåll" /></label><button class="button ghost small" type="submit">Spara layout</button></form>
@@ -3727,10 +3735,11 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     await loadScreens();
   });
   card.querySelector('.screen-playback-mode').addEventListener('change', async event => {
-    const playback_mode = event.currentTarget.value === 'sync' ? 'sync' : 'independent';
+    const playback_mode = ['sync', 'random'].includes(event.currentTarget.value) ? event.currentTarget.value : 'independent';
     const { error } = await supabase.from('screens').update({ playback_mode }).eq('id', screen.id);
     if (error) return toast(error.message, true);
-    toast(playback_mode === 'sync' ? 'Synkad uppspelning aktiveras på nästa synk.' : 'Fristående uppspelning aktiveras på nästa synk.');
+    const label = { sync: 'Synkad', random: 'Slumpmässig', independent: 'Fristående' }[playback_mode];
+    toast(`${label} uppspelning aktiveras på nästa synk.`);
     await loadScreens();
   });
   card.querySelector('.screen-autostart').addEventListener('change', async event => {
