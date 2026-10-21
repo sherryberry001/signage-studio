@@ -12,8 +12,8 @@ This document uses ScreenCloud's publicly described product areas as a capabilit
 | Playlists | Ordered reusable playlists, screen assignment, multi-zone support | Draft state, version history, duplicate/copy workflows, randomized playback, publish acknowledgements |
 | Channels and scheduling | Reusable channels, playlist priority, recurring schedules, calendar, temporary casts, expiry, draft preview, atomic per-screen publish and append-only version restore | Explicit discard, conflict resolution and richer recurrence/availability rules |
 | Apps and integrations | Native Pulse and JSON feeds, live web dashboards | Documented connector framework, OAuth integrations, Microsoft 365/Google Workspace/calendar/social/streaming connectors, connection health and credential renewal |
-| Publishing and broadcast | Per-screen versioned publishing, queued sync, draft preview, publication history, restore-as-new-version, and editor-to-admin approval requests over immutable snapshots | Targeted announcements/emergency broadcast, audience/location targeting, staged rollout and player acknowledgement |
-| People and governance | Admin/editor/viewer/group-member roles, group-scoped screen access, invitations, audit log | Spaces/location scope across screens and content; creator/publisher/manager permissions; approval rules; SSO and optional custom roles |
+| Publishing and broadcast | Per-screen versioned publishing, queued sync, draft preview, publication history, restore-as-new-version, player acknowledgement of locally stored revisions, and editor-to-admin approval requests over immutable snapshots | Targeted announcements/emergency broadcast, audience/location targeting, staged rollout and proof of playback state |
+| People and governance | Admin/editor/viewer/group-member roles, invitations, groups, location-scoped screen/content read access, audit log | Creator/publisher/manager permissions; approval rules by location; SSO and optional custom roles; audit export |
 | Operations and proof | Reported playback transitions, history, CSV, screen health timeline, feed errors | Aggregated proof-of-play, delivery acknowledgement, scheduled reports, operational dashboards and configurable alert routing |
 | Player fleet lifecycle | Android TV APK, offline cache, autostart, sync/restart, diagnostics | Managed kiosk/device-owner mode, signed update channels, staged rollout, rollback/recovery, broader hardware support and remote device management |
 | Extensibility | Supabase-backed player APIs and protected integrations | Versioned public API/webhooks, custom app SDK/runtime, connector documentation, organization audit export |
@@ -21,7 +21,7 @@ This document uses ScreenCloud's publicly described product areas as a capabilit
 ## Delivery sequence
 
 1. **Safe publishing:** separate working changes from live content; preview a channel; publish atomically; retain the last published version; restore or discard drafts; show which screens acknowledged the new version.
-2. **Locations and governance:** provide location-based screen and content read access, then extend it to granular editing and publishing permissions while preserving existing group grants.
+2. **Locations and governance:** extend location-scoped read access to granular editing, publishing, and approval permissions while preserving existing group grants.
 3. **Creation and media reliability:** resumable uploads, replacement/version history, native layouts/templates, and a clear preview for the target TV aspect ratio.
 4. **Broadcast and workflow:** approval states, publisher permissions, emergency/temporary announcements, target selection, expiry, and delivery receipts.
 5. **Integrations and APIs:** connector contract, credential lifecycle, health diagnostics, prioritized OAuth integrations, webhooks, and public API documentation.

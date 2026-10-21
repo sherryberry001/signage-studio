@@ -2,7 +2,7 @@
 
 Signage Studio should cover the core jobs handled by mature digital-signage platforms while keeping its own product identity and implementation. The target is functional coverage, not a copy of ScreenCloud's branding, source code, or proprietary assets.
 
-See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the researched capability map, delivery sequence, and product guarantees. The immediate development track is organization-scale access: locations that scope screens and read-only members, followed by granular editing and publishing roles.
+See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the capability map, delivery sequence, and product guarantees. The immediate development track is media reliability and reusable app instances, followed by richer authoring and organization controls.
 
 ## Current foundation
 
@@ -15,9 +15,9 @@ See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the researched capability
 
 | Area | Current coverage | Next product milestone |
 | --- | --- | --- |
-| Screens and devices | Pairing/recovery, stable player identity, unique active names, groups, online status, previews, bulk actions, remote restart/sync, device diagnostics, scheduled online/offline history, and downloadable support bundles | Reconcile legacy duplicate profiles; add guided remote troubleshooting and configurable alert thresholds |
-| Content | Text, image, video, web links, JSON feeds, reusable library, expiring media, versioned per-screen publishing snapshots and editor-to-admin approval | Robust upload recovery, reusable native app instances |
-| Playlists and channels | Reusable playlists with atomic drag or keyboard ordering, recurring schedules, priority, multi-zone, weekly per-screen channel calendar, draft preview, version history, restore and queued player sync | Playlist-level calendar entries and schedule conflict resolution |
+| Screens and devices | Pairing/recovery, stable player identity, unique active names, groups, locations, online status, previews, bulk actions, remote restart/sync, device diagnostics, scheduled online/offline history, player publication acknowledgements, and downloadable support bundles | Reconcile legacy duplicate profiles; add guided remote troubleshooting and configurable alert thresholds |
+| Content | Text, image, video, web links, JSON feeds, reusable library, expiring media, versioned per-screen publishing snapshots, player revision acknowledgements, and editor-to-admin approval | Robust upload recovery, reusable native app instances |
+| Playlists and channels | Reusable playlists with atomic drag or keyboard ordering, recurring schedules, priority, multi-zone, weekly per-screen channel calendar, draft preview, version history, restore, queued player sync, and delivered revision status | Playlist-level calendar entries and schedule conflict resolution |
 | Live data and apps | Native Pulse/JSON feed and web dashboard support; reusable Pulse connections with protected credentials; per-screen feed status, HTTP/network errors, last success and source host | Expand connector catalog with OAuth-backed business apps, refreshable credentials, and setup health checks |
 | Remote screen operations | Set content, temporary cast, sync, restart, and on-demand screenshot capture | Remote settings, support bundle, guided troubleshooting |
 | Team and organization | Admin/editor/viewer/group-member roles, invitations, screen groups, location-scoped screen/content read access, audit log | Granular creator/publisher/manager permissions, activity export, SSO and optional custom roles |

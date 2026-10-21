@@ -277,12 +277,22 @@ class MainActivity : Activity() {
                 val freshConfig = runCatching {
                     JSONObject(apiRequest("${baseUrl()}/rest/v1/rpc/player_screen_config", "POST", JSONObject().put("input_screen_id", id).toString()))
                 }.getOrNull()
-                val result = apiRequest("${baseUrl()}/rest/v1/rpc/player_playlist", "POST", JSONObject().put("input_screen_id", id).toString())
-                val fresh = JSONArray(result)
+                val snapshot = JSONObject(apiRequest(
+                    "${baseUrl()}/rest/v1/rpc/player_publication_snapshot",
+                    "POST",
+                    JSONObject().put("input_screen_id", id).toString()
+                ))
+                val revision = snapshot.optInt("revision", -1)
+                if (revision < 0) throw IllegalStateException("Ingen publicerad version kunde hämtas.")
+                val fresh = snapshot.optJSONArray("items") ?: JSONArray()
                 val previous = prefs.getString("playlist", "[]") ?: "[]"
                 val changed = fresh.toString() != previous
                 val configChanged = freshConfig != null && freshConfig.toString() != screenConfig.toString()
-                prefs.edit().putString("playlist", fresh.toString()).putString("last_sync", Instant.now().toString()).apply()
+                check(prefs.edit()
+                    .putString("playlist", fresh.toString())
+                    .putInt("published_revision", revision)
+                    .putString("last_sync", Instant.now().toString())
+                    .commit()) { "Det synkade innehållet kunde inte sparas lokalt." }
                 setPlayerPlaylist(fresh)
                 lastSync = "Synkad ${DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.now())}"
                 preloadMedia(fresh)
@@ -302,6 +312,7 @@ class MainActivity : Activity() {
                         if (changed) index = 0
                         showCurrentSlide()
                     }
+                    worker.execute { acknowledgePublication(id, revision) }
                 }
                 onComplete?.invoke(null)
             } catch (_: Exception) {
@@ -770,6 +781,21 @@ class MainActivity : Activity() {
             item?.optString("kind")?.takeIf { it.isNotBlank() },
             item?.optString("source_url")?.takeIf { it.isNotBlank() }
         )
+    }
+
+    private fun acknowledgePublication(id: String, revision: Int) {
+        try {
+            apiRequest(
+                "${baseUrl()}/rest/v1/rpc/player_ack_screen_publication",
+                "POST",
+                JSONObject()
+                    .put("input_screen_id", id)
+                    .put("input_revision", revision)
+                    .toString()
+            )
+        } catch (_: Exception) {
+            // The next successful content sync retries this acknowledgement.
+        }
     }
 
     private fun reportHeartbeat(item: JSONObject?, title: String, body: String, kind: String?, source: String?) {
