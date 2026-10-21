@@ -1128,6 +1128,19 @@ function renderPlaylistLibrary() {
     card.className = 'playlist-manage-card';
     card.dataset.playlistId = playlist.id;
     card.innerHTML = `<div class="playlist-manage-heading"><div><span class="section-kicker">SPELLISTA · ${items.length} OBJEKT</span><form class="playlist-name-form" data-playlist-name="${esc(playlist.id)}"><input name="name" maxlength="80" value="${esc(playlist.name)}" aria-label="Spellistans namn" ${canEdit ? '' : 'disabled'} /><button class="button ghost small" type="submit" ${canEdit ? '' : 'disabled'}>Spara namn</button></form><span>${screenCount} skärmar · ${channelCount} kanaler använder listan</span></div><button class="button ghost small playlist-delete" type="button" data-playlist-delete="${esc(playlist.id)}" ${!canEdit || screenCount > 0 || channelCount > 0 ? 'disabled' : ''} title="${screenCount || channelCount ? 'Ta först bort listan från skärmar och kanaler.' : 'Ta bort tomma eller oanvända spellistor.'}">Ta bort</button></div><div class="playlist-manage-items">${items.map((item, index) => `<div class="playlist-manage-item" draggable="${canEdit ? 'true' : 'false'}" data-playlist-slide="${esc(item.id)}" aria-label="Flytta ${esc(item.title || kindLabel(item.kind))} i spellistan"><div class="slide-thumb">${item.kind === 'image' ? '▧' : item.kind === 'video' ? '▶' : item.kind === 'feed' || item.kind === 'web' ? '↗' : item.kind === 'clock' ? '◷' : 'T'}</div><div class="playlist-manage-copy"><strong>${esc(item.title || kindLabel(item.kind))}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s</span></div><div class="playlist-manage-actions"><button class="icon-button" type="button" data-playlist-item-action="up" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === 0 ? 'disabled' : ''} aria-label="Flytta upp">↑</button><button class="icon-button" type="button" data-playlist-item-action="down" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === items.length - 1 ? 'disabled' : ''} aria-label="Flytta ned">↓</button><button class="icon-button delete" type="button" data-playlist-item-action="delete" data-playlist-item-id="${esc(item.id)}" ${!canEdit ? 'disabled' : ''} aria-label="Ta bort från spellistan">×</button></div></div>`).join('') || '<div class="playlist-manage-empty">Spellistan är tom. Lägg till publicerat material från biblioteket nedan.</div>'}</div>`;
+    const heading = card.querySelector('.playlist-manage-heading');
+    const actions = document.createElement('div');
+    actions.className = 'playlist-manage-ops';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'button ghost small';
+    copy.dataset.playlistDuplicate = playlist.id;
+    copy.textContent = 'Kopiera';
+    copy.title = 'Skapa en fristående kopia av spellistan och dess objekt.';
+    copy.hidden = !canEdit;
+    const remove = heading.querySelector('[data-playlist-delete]');
+    actions.append(copy, remove);
+    heading.append(actions);
     return card;
   }));
   if (!playlists.length) container.innerHTML = '<div class="playlist-manage-empty">Skapa en spellista för att samla innehåll och återanvända den på flera skärmar eller i kanaler.</div>';
@@ -1213,6 +1226,28 @@ $('#playlistManagementList').addEventListener('submit', async event => {
 });
 
 $('#playlistManagementList').addEventListener('click', async event => {
+  const duplicatePlaylist = event.target.closest('[data-playlist-duplicate]');
+  if (duplicatePlaylist && !duplicatePlaylist.disabled) {
+    const source = playlists.find(item => item.id === duplicatePlaylist.dataset.playlistDuplicate);
+    if (!source || !['admin','editor'].includes(currentRole)) return;
+    const suggestedName = `${source.name.slice(0, 72)} – kopia`;
+    const name = prompt(`Namn på kopian av ”${source.name}”:`, suggestedName)?.trim();
+    if (!name) return;
+    if (name.length > 80) return toast('Spellistans namn får vara högst 80 tecken.', true);
+    duplicatePlaylist.disabled = true;
+    try {
+      const { error } = await supabase.rpc('duplicate_playlist_with_content', {
+        input_playlist_id: source.id,
+        input_name: name
+      });
+      if (error) return toast(error.message, true);
+      toast(`Spellistan ”${source.name}” kopierades som ”${name}”. Kopian är fristående och inte tilldelad någon skärm eller kanal.`);
+      await loadScreens();
+    } finally {
+      duplicatePlaylist.disabled = false;
+    }
+    return;
+  }
   const deletePlaylist = event.target.closest('[data-playlist-delete]');
   if (deletePlaylist && !deletePlaylist.disabled) {
     const playlist = playlists.find(item => item.id === deletePlaylist.dataset.playlistDelete);
