@@ -624,6 +624,31 @@ $('#channelManagementList').addEventListener('submit', async event => {
 });
 
 $('#channelManagementList').addEventListener('click', async event => {
+  const moveButton = event.target.closest('[data-channel-playlist-move]');
+  if (moveButton && !moveButton.disabled) {
+    if (!['admin', 'editor'].includes(currentRole)) return;
+    const channelId = moveButton.dataset.channelId;
+    const channelItems = channelPlaylists.filter(item => item.channel_id === channelId).sort((a, b) => a.sort_order - b.sort_order);
+    const fromIndex = channelItems.findIndex(item => item.id === moveButton.dataset.channelPlaylistMove);
+    const toIndex = fromIndex + (moveButton.dataset.direction === 'up' ? -1 : 1);
+    if (fromIndex < 0 || toIndex < 0 || toIndex >= channelItems.length) return;
+    [channelItems[fromIndex], channelItems[toIndex]] = [channelItems[toIndex], channelItems[fromIndex]];
+    moveButton.disabled = true;
+    try {
+      const { error } = await supabase.rpc('reorder_channel_playlists', {
+        input_channel_id: channelId,
+        input_playlist_ids: channelItems.map(item => item.playlist_id)
+      });
+      if (error) return toast(error.message, true);
+      const affectedScreens = new Set(channelSchedules.filter(item => item.channel_id === channelId).map(item => item.screen_id));
+      const countLabel = affectedScreens.size === 1 ? '1 skärm' : `${affectedScreens.size} skärmar`;
+      toast(`Spellistornas ordning sparades som utkast. Publicera ${countLabel} för att skicka ändringen till TV:n.`);
+      await loadScreens();
+    } finally {
+      moveButton.disabled = false;
+    }
+    return;
+  }
   const button = event.target.closest('[data-channel-playlist-remove]');
   if (!button) return;
   const item = channelPlaylists.find(row => row.id === button.dataset.channelPlaylistRemove);
@@ -1073,7 +1098,7 @@ function updateChannelManagement() {
     const available = playlists.filter(playlist => !usedIds.has(playlist.id));
     const card = document.createElement('article');
     card.className = 'channel-manage-card';
-    card.innerHTML = `<div class="channel-manage-heading"><strong>${esc(channel.name)}</strong><span>${memberships.length} spellistor</span></div><div class="channel-playlist-items">${memberships.map(item => { const playlist = playlists.find(value => value.id === item.playlist_id); return `<article class="channel-playlist-entry"><div class="channel-playlist-item"><div><strong>${esc(playlist?.name || 'Okänd spellista')}</strong><span>Prioritet ${item.priority} · ordning ${item.sort_order + 1} · ${scheduleSummary(item)}</span></div><button class="button ghost small" type="button" data-channel-playlist-remove="${esc(item.id)}" ${canEdit ? '' : 'hidden'}>Ta bort</button></div>${canEdit ? `<details class="channel-playlist-edit"><summary>Ändra tider och prioritet</summary><form data-channel-playlist-edit="${esc(item.id)}" data-channel-id="${esc(channel.id)}"><label>Prioritet<input name="priority" type="number" min="0" max="1000" value="${Number(item.priority)}" required /></label>${scheduleFields(item)}<button class="button ghost small" type="submit">Spara ändringar som utkast</button></form></details>` : ''}</article>`; }).join('') || '<div class="slide-sub">Kanalen har inga spellistor.</div>'}</div>${canEdit ? `<form class="channel-playlist-form" data-channel-id="${esc(channel.id)}"><select name="playlist_id" required aria-label="Spellista att lägga till"><option value="">Lägg till spellista</option>${available.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('')}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Prioritet" />${scheduleFields()}<button class="button ghost small" type="submit" ${available.length ? '' : 'disabled'}>＋ Lägg till i kanalen</button></form>` : ''}`;
+    card.innerHTML = `<div class="channel-manage-heading"><strong>${esc(channel.name)}</strong><span>${memberships.length} spellistor</span></div><div class="channel-playlist-items">${memberships.map((item, index) => { const playlist = playlists.find(value => value.id === item.playlist_id); return `<article class="channel-playlist-entry"><div class="channel-playlist-item"><div><strong>${esc(playlist?.name || 'Okänd spellista')}</strong><span>Prioritet ${item.priority} · ordning ${item.sort_order + 1} · ${scheduleSummary(item)}</span></div><div class="channel-playlist-actions"><button class="icon-button" type="button" data-channel-playlist-move="${esc(item.id)}" data-channel-id="${esc(channel.id)}" data-direction="up" aria-label="Flytta upp ${esc(playlist?.name || 'spellista')}" ${!canEdit || index === 0 ? 'disabled' : ''}>↑</button><button class="icon-button" type="button" data-channel-playlist-move="${esc(item.id)}" data-channel-id="${esc(channel.id)}" data-direction="down" aria-label="Flytta ned ${esc(playlist?.name || 'spellista')}" ${!canEdit || index === memberships.length - 1 ? 'disabled' : ''}>↓</button><button class="button ghost small" type="button" data-channel-playlist-remove="${esc(item.id)}" ${canEdit ? '' : 'hidden'}>Ta bort</button></div></div>${canEdit ? `<details class="channel-playlist-edit"><summary>Ändra tider och prioritet</summary><form data-channel-playlist-edit="${esc(item.id)}" data-channel-id="${esc(channel.id)}"><label>Prioritet<input name="priority" type="number" min="0" max="1000" value="${Number(item.priority)}" required /></label>${scheduleFields(item)}<button class="button ghost small" type="submit">Spara ändringar som utkast</button></form></details>` : ''}</article>`; }).join('') || '<div class="slide-sub">Kanalen har inga spellistor.</div>'}</div>${canEdit ? `<form class="channel-playlist-form" data-channel-id="${esc(channel.id)}"><select name="playlist_id" required aria-label="Spellista att lägga till"><option value="">Lägg till spellista</option>${available.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('')}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Prioritet" />${scheduleFields()}<button class="button ghost small" type="submit" ${available.length ? '' : 'disabled'}>＋ Lägg till i kanalen</button></form>` : ''}`;
     return card;
   }));
   if (!channels.length) container.innerHTML = '<div class="slide-sub">Skapa en kanal och välj dess första spellista ovan.</div>';
