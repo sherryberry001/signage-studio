@@ -861,7 +861,7 @@ grant execute on function public.player_playlist(uuid) to anon, authenticated;
 create table if not exists public.screen_commands (
   id uuid primary key default gen_random_uuid(),
   screen_id uuid not null references public.screens(id) on delete cascade,
-  command text not null check (command in ('sync_now', 'restart_player')),
+  command text not null check (command in ('sync_now', 'restart_player', 'capture_preview')),
   status text not null default 'pending' check (status in ('pending', 'running', 'completed', 'failed')),
   created_at timestamptz not null default now(),
   started_at timestamptz,
@@ -894,7 +894,7 @@ begin
      and public.current_team_role() is distinct from 'editor' then
     raise exception 'Only admins and editors can operate players' using errcode = '42501';
   end if;
-  if input_command not in ('sync_now', 'restart_player') then
+  if input_command not in ('sync_now', 'restart_player', 'capture_preview') then
     raise exception 'Unsupported player command';
   end if;
   if not exists (select 1 from public.screens where id = input_screen_id and is_active = true) then

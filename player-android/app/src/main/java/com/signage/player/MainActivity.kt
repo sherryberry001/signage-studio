@@ -70,6 +70,7 @@ class MainActivity : Activity() {
     private var previewTask: Runnable? = null
     private var deviceReportTask: Runnable? = null
     private var previewUploadRunning = false
+    private val pendingPreviewCallbacks = mutableListOf<(String?) -> Unit>()
     private var zoneAdvanceTask: Runnable? = null
     private var zoneClockTask: Runnable? = null
     private var zoneGeneration = 0
@@ -314,6 +315,10 @@ class MainActivity : Activity() {
                         syncPlaylist { error -> completePlayerCommand(id, commandId, error) }
                         return@execute
                     }
+                    "capture_preview" -> {
+                        handler.post { captureAndUploadPreview { error -> completePlayerCommand(id, commandId, error) } }
+                        return@execute
+                    }
                     "restart_player" -> {
                         completePlayerCommand(id, commandId, null)
                         handler.post { recreate() }
@@ -335,41 +340,64 @@ class MainActivity : Activity() {
         } catch (_: Exception) { }
     }
 
-    private fun captureAndUploadPreview() {
-        if (previewUploadRunning || isFinishing || isDestroyed) return
+    private fun captureAndUploadPreview(onComplete: ((String?) -> Unit)? = null) {
+        if (previewUploadRunning) {
+            onComplete?.let { synchronized(pendingPreviewCallbacks) { pendingPreviewCallbacks.add(it) } }
+            return
+        }
+        if (isFinishing || isDestroyed) {
+            onComplete?.let { callback -> previewWorker.execute { callback("Spelaren håller på att stängas.") } }
+            return
+        }
         val width = window.decorView.width
         val height = window.decorView.height
-        if (width <= 0 || height <= 0) return
+        if (width <= 0 || height <= 0) {
+            onComplete?.let { callback -> previewWorker.execute { callback("TV-bilden är inte redo för avläsning.") } }
+            return
+        }
         previewUploadRunning = true
+        onComplete?.let { synchronized(pendingPreviewCallbacks) { pendingPreviewCallbacks.add(it) } }
         val scale = minOf(1f, 1280f / width)
         val bitmap = Bitmap.createBitmap((width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1), Bitmap.Config.RGB_565)
         PixelCopy.request(window, bitmap, { result ->
             if (result != PixelCopy.SUCCESS) {
                 bitmap.recycle()
-                previewUploadRunning = false
+                finishPreviewCapture("TV-bilden kunde inte läsas av (PixelCopy $result).")
                 return@request
             }
             val id = screenId
             if (id.isNullOrBlank()) {
                 bitmap.recycle()
-                previewUploadRunning = false
+                finishPreviewCapture("Spelaren är inte parkopplad.")
                 return@request
             }
             previewWorker.execute {
+                var error: String? = null
                 try {
                     val bytes = java.io.ByteArrayOutputStream().use { output ->
                         check(bitmap.compress(Bitmap.CompressFormat.JPEG, 62, output))
                         output.toByteArray()
                     }
                     uploadPreview(id, bytes)
-                } catch (_: Exception) {
+                } catch (exception: Exception) {
                     // The next periodic capture retries if the connection or upload failed.
+                    error = exception.message?.take(300) ?: "Livebilden kunde inte skickas."
                 } finally {
                     bitmap.recycle()
-                    handler.post { previewUploadRunning = false }
+                    finishPreviewCapture(error)
                 }
             }
         }, handler)
+    }
+
+    private fun finishPreviewCapture(error: String?) {
+        handler.post {
+            previewUploadRunning = false
+            val callbacks = synchronized(pendingPreviewCallbacks) {
+                pendingPreviewCallbacks.toList().also { pendingPreviewCallbacks.clear() }
+            }
+            if (callbacks.isNotEmpty()) previewWorker.execute { callbacks.forEach { callback -> callback(error) } }
+        }
     }
 
     private fun uploadPreview(id: String, bytes: ByteArray) {

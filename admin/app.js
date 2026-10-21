@@ -1488,6 +1488,8 @@ async function refreshScreenStatus() {
     if (forceButton) forceButton.classList.toggle('hidden', !screen.forced_slide_id);
     const commandStatus = card.querySelector('[data-command-status]');
     if (commandStatus) commandStatus.textContent = formatCommandStatus(screenCommands.find(command => command.screen_id === screen.id));
+    const previewButton = card.querySelector('[data-player-command="capture_preview"]');
+    if (previewButton) previewButton.disabled = !online;
     card.querySelectorAll('[data-slide-action="show-now"]').forEach(button => {
       button.classList.toggle('selected', button.dataset.id === screen.forced_slide_id);
       button.textContent = button.dataset.id === screen.forced_slide_id ? 'Visas nu' : 'Visa nu';
@@ -1511,6 +1513,7 @@ function formatCommandStatus(command) {
   if (command.status === 'pending') return `Väntar på TV:n · ${clock}`;
   if (command.status === 'running') return `TV:n utför kommandot · ${clock}`;
   if (command.status === 'failed') return `Misslyckades · ${command.error_message || 'okänt fel'} · ${clock}`;
+  if (command.command === 'capture_preview') return `Livebild uppdaterad · ${clock}`;
   const label = command.command === 'restart_player' ? 'Omstart kvitterad' : 'Synk kvitterad';
   return `${label} · ${clock}`;
 }
@@ -1669,7 +1672,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
       <label class="playlist-assignment ${canAdmin ? '' : 'hidden'}">Spellista för den här skärmen<select class="screen-playlist">${playlistOptions}</select><span>En spellista kan delas av flera skärmar.</span></label>
       <form class="screen-layout-form ${canAdmin ? '' : 'hidden'}"><label>Skärmlayout<select name="layout_type"><option value="single" ${screen.layout_type === 'single' ? 'selected' : ''}>En zon · fullskärm</option><option value="bottom_ticker" ${screen.layout_type === 'bottom_ticker' ? 'selected' : ''}>Huvudyta + ticker längst ned</option><option value="side_panel" ${screen.layout_type === 'side_panel' ? 'selected' : ''}>Huvudyta + sidopanel</option></select></label><label>Spellista i zon 2<select name="zone_playlist_id"><option value="">Visa zontext</option>${playlists.map(playlist => `<option value="${esc(playlist.id)}" ${playlist.id === screen.zone_playlist_id ? 'selected' : ''}>${esc(playlist.name)}</option>`).join('')}</select></label><label class="layout-text-label">Zontext<input name="layout_text" maxlength="500" value="${esc(screen.layout_text || '')}" placeholder="Visas om zonspellistan saknar aktivt innehåll" /></label><button class="button ghost small" type="submit">Spara layout</button></form>
       <section class="channel-assignment ${canEdit ? '' : 'hidden'}"><div class="channel-heading"><div><strong>Kanalschema</strong><span>Aktiv kanal prioriteras framför skärmens grundspellista. Lägre prioritetstal vinner.</span></div></div><form class="channel-schedule-form"><select name="channel_id" required>${channelOptions}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Kanalprioritet" />${scheduleFields()}<button class="button ghost small" type="submit">＋ Schemalägg kanal</button></form><div class="channel-schedule-list">${assignedChannels.map(item => { const channel = channels.find(c => c.id === item.channel_id); return `<div class="channel-schedule-row"><div><strong>${esc(channel?.name || 'Okänd kanal')}</strong><span>Prioritet ${item.priority} · ${scheduleSummary(item)}</span></div><button class="button ghost small remove-channel-schedule" data-id="${esc(item.id)}">Ta bort</button></div>`; }).join('') || '<div class="slide-sub">Inga kanaler schemalagda för den här skärmen.</div>'}</div></section>
-      <div class="player-operations ${canEdit ? '' : 'hidden'}"><div><strong>Fjärråtgärder</strong><span class="player-command-status" data-command-status>${esc(formatCommandStatus(latestCommand))}</span></div><div class="player-operation-buttons"><button class="button ghost small" data-player-command="sync_now">Synka nu</button><button class="button ghost small" data-player-command="restart_player">Starta om spelaren</button><button class="button ghost small" data-support-bundle>Hämta felsökningspaket</button></div></div>
+      <div class="player-operations ${canEdit ? '' : 'hidden'}"><div><strong>Fjärråtgärder</strong><span class="player-command-status" data-command-status>${esc(formatCommandStatus(latestCommand))}</span></div><div class="player-operation-buttons"><button class="button ghost small" data-player-command="sync_now">Synka nu</button><button class="button ghost small" data-player-command="capture_preview" ${isOnline(screen) ? "" : "disabled"} title="${isOnline(screen) ? "Begär en ny skärmbild från TV:n." : "TV:n måste vara online för att skicka en ny skärmbild."}">Uppdatera livebild</button><button class="button ghost small" data-player-command="restart_player">Starta om spelaren</button><button class="button ghost small" data-support-bundle>Hämta felsökningspaket</button></div></div>
       <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id && canEdit ? '' : 'hidden'}">Återgå till spellistan</button></div>
       <div class="playlist">${slides.map((slide, index) => renderSlide(slide, index, slides.length, canEdit)).join('') || '<div class="slide-sub">Spellistan är tom. Lägg till ett objekt nedan.</div>'}</div>
       ${channelSlides.length ? `<details class="screen-channel-content"><summary>Innehåll från skärmens kanaler · ${channelSlides.length} objekt</summary><div class="playlist">${channelSlides.map(slide => `<div class="slide-row"><div class="slide-thumb">${slide.kind === 'image' ? '▧' : slide.kind === 'video' ? '▶' : slide.kind === 'feed' || slide.kind === 'web' ? '↗' : slide.kind === 'clock' ? '◷' : 'T'}</div><div><div class="slide-title">${esc(slide.title || kindLabel(slide.kind))}</div><div class="slide-sub">${esc(kindLabel(slide.kind))} · ${esc(playlists.find(item => item.id === slide.playlist_id)?.name || 'spellista')}</div></div><div class="slide-buttons"><button class="button ghost small channel-show-now" data-id="${esc(slide.id)}" ${canEdit ? '' : 'hidden'}>Visa nu</button></div></div>`).join('')}</div></details>` : ''}
@@ -1811,9 +1814,9 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
         input_command: button.dataset.playerCommand
       });
       if (error) return toast(error.message, true);
-      toast(button.dataset.playerCommand === 'restart_player'
-        ? `Omstart köad för “${screen.name}”.`
-        : `Synk köad för “${screen.name}”.`);
+      const commandLabel = button.dataset.playerCommand === 'restart_player' ? 'Omstart'
+        : button.dataset.playerCommand === 'capture_preview' ? 'Ny livebild' : 'Synk';
+      toast(`${commandLabel} köad för “${screen.name}”.`);
       refreshScreenStatus();
     } finally {
       button.disabled = false;
