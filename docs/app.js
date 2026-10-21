@@ -156,6 +156,7 @@ let mediaFolders = [];
 let mediaLibraryVersions = [];
 let activityLog = [];
 let playbackEvents = [];
+let playbackAggregates = [];
 let integrationStatuses = [];
 let signageIntegrations = [];
 let currentRole = null;
@@ -584,7 +585,7 @@ $('#playbackTo').value = localDateInput(new Date());
 $('#playbackFrom').addEventListener('change', loadPlaybackEvents);
 $('#playbackTo').addEventListener('change', loadPlaybackEvents);
 $('#playbackScreen').addEventListener('change', loadPlaybackEvents);
-$('#playbackSearch').addEventListener('input', renderPlaybackEvents);
+$('#playbackSearch').addEventListener('input', () => { renderPlaybackEvents(); renderPlaybackAggregates(); });
 $('#exportPlayback').addEventListener('click', exportPlaybackEvents);
 $('#refreshIntegrations').addEventListener('click', loadIntegrationStatus);
 $('#integrationSearch').addEventListener('input', renderIntegrationStatus);
@@ -1532,7 +1533,7 @@ function renderPlaybackEvents() {
   const rows = filteredPlaybackEvents();
   const screenCount = new Set(rows.map(event => event.screen_id || event.screen_name)).size;
   const completedMs = rows.reduce((total, event) => total + (event.ended_at ? Math.max(0, new Date(event.ended_at) - new Date(event.started_at)) : 0), 0);
-  $('#playbackSummary').innerHTML = `<span><strong>${rows.length}</strong> övergångar</span><span><strong>${screenCount}</strong> skärmar</span><span><strong>${Math.round(completedMs / 60000)}</strong> min registrerad visningstid</span>`;
+  $('#playbackSummary').innerHTML = `<span><strong>${rows.length}</strong> händelser i listan</span><span><strong>${screenCount}</strong> skärmar i listan</span><span><strong>${Math.round(completedMs / 60000)}</strong> min registrerad tid i listan</span>`;
   if (!rows.length) {
     list.innerHTML = `<div class="activity-empty">${playbackEvents.length ? 'Inget matchar filtren.' : 'Ingen uppspelningshistorik under perioden. Spelaren rapporterar första posten när den byter innehåll.'}</div>`;
     return;
@@ -1544,6 +1545,23 @@ function renderPlaybackEvents() {
     return seconds >= 3600 ? `${Math.floor(seconds / 3600)} h ${Math.floor(seconds % 3600 / 60)} min` : `${Math.floor(seconds / 60)} min ${seconds % 60} sek`;
   };
   list.innerHTML = `<div class="activity-table playback-table" role="table" aria-label="Uppspelningshistorik"><div class="activity-table-head" role="row"><span>Tid</span><span>Skärm</span><span>Innehåll</span><span>Rapporterad visning</span></div>${rows.map(event => `<div class="activity-row" role="row"><time datetime="${esc(event.started_at)}">${esc(date(event.started_at))}</time><span>${esc(event.screen_name)}</span><span><strong>${esc(event.content_title)}</strong><small>${esc(event.content_kind || 'innehåll')}</small></span><span>${esc(duration(event))}</span></div>`).join('')}</div>`;
+}
+
+function renderPlaybackAggregates() {
+  const list = $('#playbackAggregate');
+  if (!list) return;
+  const search = ($('#playbackSearch')?.value || '').trim().toLocaleLowerCase('sv-SE');
+  const rows = playbackAggregates.filter(item => !search
+    || `${item.content_title} ${item.content_kind || ''}`.toLocaleLowerCase('sv-SE').includes(search));
+  if (!rows.length) {
+    list.innerHTML = `<div class="activity-empty">${playbackAggregates.length ? 'Inget innehåll matchar sökningen.' : 'Ingen avslutad visningsperiod i det valda intervallet.'}</div>`;
+    return;
+  }
+  const formatDuration = value => {
+    const minutes = Math.floor(Number(value || 0) / 60);
+    return minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
+  };
+  list.innerHTML = `<div class="activity-table playback-aggregate-table" role="table" aria-label="Sammanräknad rapporterad visning per innehåll"><div class="activity-table-head" role="row"><span>Innehåll</span><span>Typ</span><span>Skärmar</span><span>Perioder</span><span>Rapporterad tid</span></div>${rows.map(item => `<div class="activity-row" role="row"><strong>${esc(item.content_title)}</strong><span>${esc(item.content_kind || 'innehåll')}</span><span>${Number(item.screen_count) || 0}</span><span>${Number(item.playback_count) || 0}</span><strong>${formatDuration(item.reported_seconds)}</strong></div>`).join('')}</div>`;
 }
 
 async function loadPlaybackEvents() {
@@ -1559,10 +1577,20 @@ async function loadPlaybackEvents() {
     .order('started_at', { ascending: false }).order('id', { ascending: false }).limit(1000);
   const screenId = $('#playbackScreen').value;
   if (screenId !== 'all') query = query.eq('screen_id', screenId);
-  const { data, error } = await query;
-  if (error) return toast(error.message, true);
-  playbackEvents = data || [];
+  const [historyResult, aggregateResult] = await Promise.all([
+    query,
+    supabase.rpc('team_playback_summary', {
+      input_from: start,
+      input_to: end,
+      input_screen_id: screenId === 'all' ? null : screenId
+    })
+  ]);
+  if (historyResult.error) return toast(historyResult.error.message, true);
+  if (aggregateResult.error) return toast(aggregateResult.error.message, true);
+  playbackEvents = historyResult.data || [];
+  playbackAggregates = aggregateResult.data || [];
   renderPlaybackEvents();
+  renderPlaybackAggregates();
 }
 
 function exportPlaybackEvents() {

@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261125-playback-offline-v1" />
-    <script type="module" src="./app.js?v=20261125-playback-offline-v1"></script>
+    <link rel="stylesheet" href="./style.css?v=20261126-playback-summary-v2" />
+    <script type="module" src="./app.js?v=20261126-playback-summary-v2"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -105,6 +105,8 @@
           <div class="activity-heading"><div><strong>Uppspelningshistorik</strong><span>Spelaren rapporterar innehållsbyten. Vid offline stannar visningstiden vid senaste kontakt och fortsätter som en ny period efter återanslutning.</span></div><div class="playback-actions"><button id="exportPlayback" class="button ghost small" type="button">Exportera CSV</button><button id="refreshPlayback" class="button ghost small" type="button">↻ Uppdatera</button></div></div>
           <div class="activity-tools playback-tools"><label>Från <input id="playbackFrom" type="date" /></label><label>Till <input id="playbackTo" type="date" /></label><select id="playbackScreen" aria-label="Filtrera skärm"><option value="all">Alla tillgängliga skärmar</option></select><input id="playbackSearch" type="search" placeholder="Sök innehåll eller skärm…" aria-label="Sök uppspelning" /></div>
           <div id="playbackSummary" class="playback-summary"></div>
+          <h3 class="playback-aggregate-heading">Rapporterad visning per innehåll <small>Avslutade perioder, summerade för hela datumintervallet. Händelselistan nedan visar de 1 000 senaste posterna.</small></h3>
+          <div id="playbackAggregate" class="activity-list" aria-live="polite"></div>
           <div id="playbackList" class="activity-list" aria-live="polite"></div>
         </section>
         <section id="integrationPanel" class="activity-panel hidden" data-workspace-panel="integrations">
