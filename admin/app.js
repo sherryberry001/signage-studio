@@ -156,6 +156,8 @@ let locations = [];
 let locationMembers = [];
 let playlists = [];
 let playlistSlides = [];
+let playlistVersions = [];
+let playlistVersionHistoryAvailable = true;
 let channels = [];
 let channelPlaylists = [];
 let channelSchedules = [];
@@ -321,6 +323,8 @@ function setSession(user) {
     if (!sameUser) {
       operationalSettings = { ...defaultOperationalSettings };
       operationalSettingsAvailable = true;
+      playlistVersions = [];
+      playlistVersionHistoryAvailable = true;
       screenBroadcasts = [];
       screenBroadcastDelivery = [];
       screenBroadcastDeliveryAvailable = true;
@@ -350,6 +354,8 @@ function setSession(user) {
     locationMembers = [];
     playlists = [];
     playlistSlides = [];
+    playlistVersions = [];
+    playlistVersionHistoryAvailable = true;
     channels = [];
     channelPlaylists = [];
     channelSchedules = [];
@@ -879,6 +885,7 @@ async function loadScreens() {
   const [
     { data, error },
     { data: playlistData, error: playlistError },
+    { data: playlistVersionData, error: playlistVersionError },
     { data: memberData, error: memberError },
     { data: channelData, error: channelError },
     { data: channelPlaylistData, error: channelPlaylistError },
@@ -898,6 +905,7 @@ async function loadScreens() {
   ] = await Promise.all([
     supabase.from('screens').select('*').order('created_at', { ascending: false }),
     supabase.from('playlists').select('*').order('name', { ascending: true }),
+    supabase.from('playlist_versions').select('id,playlist_id,version,playlist_name,created_by,created_at').order('version', { ascending: false }).limit(1000),
     supabase.from('team_members').select('user_id,email,role').order('email', { ascending: true }),
     supabase.from('channels').select('*').order('name', { ascending: true }),
     supabase.from('channel_playlists').select('*').order('channel_id').order('sort_order'),
@@ -918,6 +926,7 @@ async function loadScreens() {
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
   if (playlistError) return toast(playlistError.message, true);
+  if (playlistVersionError && playlistVersionError.code !== '42P01') return toast(playlistVersionError.message, true);
   if (memberError) return toast(memberError.message, true);
   if (channelError) return toast(channelError.message, true);
   if (channelPlaylistError) return toast(channelPlaylistError.message, true);
@@ -984,6 +993,8 @@ async function loadScreens() {
   locations = locationData || [];
   locationMembers = locationMemberData || [];
   playlists = nextPlaylists;
+  playlistVersions = playlistVersionError ? [] : (playlistVersionData || []);
+  playlistVersionHistoryAvailable = !playlistVersionError;
   playlistSlides = playlistSlideData || [];
   channels = nextChannels;
   channelPlaylists = channelPlaylistData || [];
@@ -1327,6 +1338,51 @@ function renderPlaylistLibrary() {
     card.className = 'playlist-manage-card';
     card.dataset.playlistId = playlist.id;
     card.innerHTML = `<div class="playlist-manage-heading"><div><span class="section-kicker">SPELLISTA · ${items.length} OBJEKT</span><form class="playlist-name-form" data-playlist-name="${esc(playlist.id)}"><input name="name" maxlength="80" value="${esc(playlist.name)}" aria-label="Spellistans namn" ${canEdit ? '' : 'disabled'} /><button class="button ghost small" type="submit" ${canEdit ? '' : 'disabled'}>Spara namn</button></form><span>${screenCount} skärmar · ${channelCount} kanaler använder listan</span></div><button class="button ghost small playlist-delete" type="button" data-playlist-delete="${esc(playlist.id)}" ${!canEdit || screenCount > 0 || channelCount > 0 ? 'disabled' : ''} title="${screenCount || channelCount ? 'Ta först bort listan från skärmar och kanaler.' : 'Ta bort tomma eller oanvända spellistor.'}">Ta bort</button></div><div class="playlist-manage-items">${items.map((item, index) => `<div class="playlist-manage-item" draggable="${canEdit ? 'true' : 'false'}" data-playlist-slide="${esc(item.id)}" aria-label="Flytta ${esc(item.title || kindLabel(item.kind))} i spellistan"><div class="slide-thumb">${item.kind === 'image' ? '▧' : item.kind === 'video' ? '▶' : item.kind === 'feed' || item.kind === 'web' ? '↗' : item.kind === 'clock' ? '◷' : 'T'}</div><div class="playlist-manage-copy"><strong>${esc(item.title || kindLabel(item.kind))}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s</span></div><div class="playlist-manage-actions"><button class="icon-button" type="button" data-playlist-item-action="up" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === 0 ? 'disabled' : ''} aria-label="Flytta upp">↑</button><button class="icon-button" type="button" data-playlist-item-action="down" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === items.length - 1 ? 'disabled' : ''} aria-label="Flytta ned">↓</button><button class="icon-button delete" type="button" data-playlist-item-action="delete" data-playlist-item-id="${esc(item.id)}" ${!canEdit ? 'disabled' : ''} aria-label="Ta bort från spellistan">×</button></div></div>`).join('') || '<div class="playlist-manage-empty">Spellistan är tom. Lägg till publicerat material från biblioteket nedan.</div>'}</div>`;
+    if (playlistVersionHistoryAvailable) {
+      const history = playlistVersions.filter(version => version.playlist_id === playlist.id);
+      const historyDetails = document.createElement('details');
+      historyDetails.className = 'playlist-version-history';
+      const summary = document.createElement('summary');
+      summary.textContent = `Versionshistorik · ${history.length}`;
+      historyDetails.append(summary);
+      if (!history.length) {
+        const empty = document.createElement('p');
+        empty.className = 'playlist-manage-empty';
+        empty.textContent = 'Ändringar i spellistan sparas här automatiskt.';
+        historyDetails.append(empty);
+      } else {
+        const entries = document.createElement('div');
+        entries.className = 'playlist-version-history-list';
+        history.slice(0, 12).forEach(version => {
+          const row = document.createElement('div');
+          row.className = 'playlist-version-history-row';
+          const label = document.createElement('span');
+          label.textContent = `Version ${version.version} · ${new Date(version.created_at).toLocaleString('sv-SE')} · ${version.playlist_name}`;
+          row.append(label);
+          if (canEdit) {
+            const restore = document.createElement('button');
+            restore.type = 'button';
+            restore.className = 'button ghost small';
+            restore.dataset.playlistVersionRestore = version.id;
+            restore.textContent = 'Skapa kopia från version';
+            row.append(restore);
+          }
+          entries.append(row);
+        });
+        if (history.length > 12) {
+          const note = document.createElement('p');
+          note.textContent = `Visar de 12 senaste av ${history.length} versionerna.`;
+          entries.append(note);
+        }
+        historyDetails.append(entries);
+      }
+      card.append(historyDetails);
+    } else {
+      const historyNotice = document.createElement('p');
+      historyNotice.className = 'playlist-version-history-notice';
+      historyNotice.textContent = 'Versionshistorik aktiveras när databasmigrationen 20261203100000_playlist_version_history.sql har körts.';
+      card.append(historyNotice);
+    }
     const heading = card.querySelector('.playlist-manage-heading');
     const actions = document.createElement('div');
     actions.className = 'playlist-manage-ops';
@@ -1425,6 +1481,28 @@ $('#playlistManagementList').addEventListener('submit', async event => {
 });
 
 $('#playlistManagementList').addEventListener('click', async event => {
+  const versionRestore = event.target.closest('[data-playlist-version-restore]');
+  if (versionRestore && !versionRestore.disabled) {
+    const version = playlistVersions.find(item => item.id === versionRestore.dataset.playlistVersionRestore);
+    if (!version || !['admin','editor'].includes(currentRole)) return;
+    const suggestedName = `${version.playlist_name.slice(0, 61)} – version ${version.version}`;
+    const name = prompt(`Namn på den nya spellistan från version ${version.version}:`, suggestedName)?.trim();
+    if (!name) return;
+    if (name.length > 80) return toast('Spellistans namn får vara högst 80 tecken.', true);
+    versionRestore.disabled = true;
+    try {
+      const { error } = await supabase.rpc('create_playlist_from_version', {
+        input_version_id: version.id,
+        input_name: name
+      });
+      if (error) return toast(error.message, true);
+      toast(`En fristående spellista skapades från version ${version.version}. Befintliga skärmar och publicerat innehåll ändrades inte.`);
+      await loadScreens();
+    } finally {
+      versionRestore.disabled = false;
+    }
+    return;
+  }
   const duplicatePlaylist = event.target.closest('[data-playlist-duplicate]');
   if (duplicatePlaylist && !duplicatePlaylist.disabled) {
     const source = playlists.find(item => item.id === duplicatePlaylist.dataset.playlistDuplicate);
