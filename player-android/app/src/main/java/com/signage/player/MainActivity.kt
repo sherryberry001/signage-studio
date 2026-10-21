@@ -17,6 +17,7 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.PixelCopy
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -310,7 +311,7 @@ class MainActivity : Activity() {
                         if (!wasPaused || changed || configChanged) showPausedScreen()
                     } else if (outsideOperatingHours) {
                         if (wasPaused || !wasClosed || changed || configChanged) showOperatingHoursScreen()
-                    } else if (changed || configChanged || wasClosed || wasPaused || fresh.length() == 0) {
+                    } else if (currentSlide == null || changed || configChanged || wasClosed || wasPaused || fresh.length() == 0) {
                         if (changed) index = 0
                         showCurrentSlide()
                     }
@@ -409,7 +410,8 @@ class MainActivity : Activity() {
         onComplete?.let { synchronized(pendingPreviewCallbacks) { pendingPreviewCallbacks.add(it) } }
         val scale = minOf(1f, 1280f / width)
         val bitmap = Bitmap.createBitmap((width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1), Bitmap.Config.RGB_565)
-        PixelCopy.request(window, bitmap, { result ->
+        try {
+            PixelCopy.request(window, bitmap, { result ->
             if (result != PixelCopy.SUCCESS) {
                 bitmap.recycle()
                 finishPreviewCapture("TV-bilden kunde inte läsas av (PixelCopy $result).")
@@ -437,7 +439,14 @@ class MainActivity : Activity() {
                     finishPreviewCapture(error)
                 }
             }
-        }, handler)
+            }, handler)
+        } catch (exception: IllegalArgumentException) {
+            // Android TV can temporarily detach the window surface while WebView
+            // navigates or the display changes state. PixelCopy throws in that
+            // case; skip this preview instead of crashing the signage player.
+            bitmap.recycle()
+            finishPreviewCapture("TV-bilden är tillfälligt inte tillgänglig.")
+        }
     }
 
     private fun finishPreviewCapture(error: String?) {
@@ -503,9 +512,7 @@ class MainActivity : Activity() {
         dashboardRefreshTask?.let(handler::removeCallbacks)
         dashboardRefreshTask = null
         playerVideo?.stopPlayback()
-        dashboardView?.stopLoading()
-        dashboardView?.destroy()
-        dashboardView = null
+        destroyDashboardView()
         clearSecondaryZone()
         playerVideo = null
         root.removeAllViews()
@@ -556,8 +563,14 @@ class MainActivity : Activity() {
             else -> showText(item.optString("title"), item.optString("body"))
         }
         applyMultiZoneLayout(item)
-        advanceTask = Runnable { index = (index + 1) % slides.length(); showCurrentSlide() }
-        handler.postDelayed(advanceTask!!, duration)
+        // A lone scheduled item has nowhere to advance to. Recreating its
+        // WebView on every item duration causes needless full-page reloads
+        // (and can lose dashboard state). The schedule poll above still
+        // switches it when a different item becomes eligible.
+        if (eligible.size > 1) {
+            advanceTask = Runnable { index = (index + 1) % slides.length(); showCurrentSlide() }
+            handler.postDelayed(advanceTask!!, duration)
+        }
     }
 
     private fun applyMultiZoneLayout(item: JSONObject?) {
@@ -602,8 +615,11 @@ class MainActivity : Activity() {
         zoneWebRefreshTask?.let(handler::removeCallbacks)
         zoneWebRefreshTask = null
         zoneVideo?.stopPlayback()
-        zoneWebView?.stopLoading()
-        zoneWebView?.destroy()
+        zoneWebView?.let { web ->
+            (web.parent as? ViewGroup)?.removeView(web)
+            web.stopLoading()
+            web.destroy()
+        }
         zoneRoot = null
         zoneVideo = null
         zoneWebView = null
@@ -797,6 +813,14 @@ class MainActivity : Activity() {
         }
         dashboardRefreshTask = refresh
         handler.postDelayed(refresh, item.optInt("refresh_interval_seconds", 30).coerceIn(10, 3600) * 1000L)
+    }
+
+    private fun destroyDashboardView() {
+        val web = dashboardView ?: return
+        (web.parent as? ViewGroup)?.removeView(web)
+        web.stopLoading()
+        web.destroy()
+        dashboardView = null
     }
 
     private fun reportHeartbeat(item: JSONObject?) {
@@ -1499,8 +1523,7 @@ class MainActivity : Activity() {
         dashboardRefreshTask?.let(handler::removeCallbacks)
         dashboardRefreshTask = null
         playerVideo?.stopPlayback()
-        dashboardView?.stopLoading()
-        dashboardView?.destroy()
+        destroyDashboardView()
         clearSecondaryZone()
         playerVideo = null
         dashboardView = null
@@ -1523,8 +1546,7 @@ class MainActivity : Activity() {
         dashboardRefreshTask?.let(handler::removeCallbacks)
         dashboardRefreshTask = null
         playerVideo?.stopPlayback()
-        dashboardView?.stopLoading()
-        dashboardView?.destroy()
+        destroyDashboardView()
         clearSecondaryZone()
         playerVideo = null
         dashboardView = null
@@ -1636,10 +1658,12 @@ class MainActivity : Activity() {
         deviceReportTask?.let(handler::removeCallbacks)
         scheduleTask?.let(handler::removeCallbacks)
         playerVideo?.stopPlayback()
-        dashboardView?.stopLoading()
-        dashboardView?.destroy()
-        zoneWebView?.stopLoading()
-        zoneWebView?.destroy()
+        destroyDashboardView()
+        zoneWebView?.let { web ->
+            (web.parent as? ViewGroup)?.removeView(web)
+            web.stopLoading()
+            web.destroy()
+        }
         worker.shutdownNow()
         previewWorker.shutdownNow()
         super.onDestroy()
