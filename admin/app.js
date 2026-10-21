@@ -395,15 +395,39 @@ function checkConfig() {
   }
 }
 
+function authRequestMessage(error) {
+  const code = String(error?.code || '').toLowerCase();
+  const message = String(error?.message || '').toLowerCase();
+  if (error?.status === 429 || code.includes('rate_limit') || message.includes('rate limit') || message.includes('too many requests')) {
+    return 'E-postgränsen för Signage Studio är nådd just nu. Använd den senaste giltiga länken du fått. Om den har gått ut, vänta tills timkvoten fyllts på från de senaste Auth-mejlen i projektet och begär sedan en ny länk en gång. Supabases inbyggda e-posttjänst tillåter två Auth-mejl per timme.';
+  }
+  if (['otp_expired', 'token_expired', 'email_not_confirmed'].includes(code) || message.includes('expired')) {
+    return 'Inloggningslänken har gått ut eller redan använts. Begär en ny länk och öppna den i samma webbläsare.';
+  }
+  if (['user_not_found', 'signup_disabled'].includes(code) || message.includes('user not found')) {
+    return 'Kontot finns inte i Signage Studio ännu. Be en administratör kontrollera att du är inbjuden under Team & åtkomst.';
+  }
+  return 'Kunde inte skicka inloggningslänken. Kontrollera e-postadressen och försök igen senare.';
+}
+
 $('#loginForm').addEventListener('submit', async event => {
   event.preventDefault();
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  if (button.disabled) return;
   const email = $('#email').value.trim();
+  button.disabled = true;
   $('#authMessage').textContent = 'Skickar inloggningslänk …';
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    options: { emailRedirectTo: location.href }
-  });
-  $('#authMessage').textContent = error ? error.message : 'Länken är skickad. Öppna den i samma webbläsare.';
+  try {
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: location.href, shouldCreateUser: false }
+    });
+    $('#authMessage').textContent = error ? authRequestMessage(error) : 'Länken är skickad. Öppna den i samma webbläsare.';
+  } catch {
+    $('#authMessage').textContent = 'Kunde inte nå inloggningstjänsten just nu. Kontrollera anslutningen och försök igen senare.';
+  } finally {
+    button.disabled = false;
+  }
 });
 
 $('#signOut').addEventListener('click', async () => {
