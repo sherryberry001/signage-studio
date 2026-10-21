@@ -129,6 +129,8 @@ function formatUploadSize(bytes) {
 }
 let draftPreviewItems = [];
 let draftPreviewIndex = 0;
+let draftPreviewGeneration = 0;
+let draftPreviewAbortController = null;
 const authView = $('#authView');
 const appView = $('#appView');
 const screenList = $('#screenList');
@@ -2004,6 +2006,10 @@ function renderDraftPreviewItem() {
   const position = $('[data-preview-position]');
   const previous = $('[data-preview-prev]');
   const next = $('[data-preview-next]');
+  const refresh = $('[data-preview-refresh]');
+  draftPreviewAbortController?.abort();
+  draftPreviewAbortController = null;
+  const generation = ++draftPreviewGeneration;
   const item = draftPreviewItems[draftPreviewIndex];
   stage.replaceChildren();
   if (!item) {
@@ -2014,6 +2020,7 @@ function renderDraftPreviewItem() {
     position.textContent = '0 objekt';
     previous.disabled = true;
     next.disabled = true;
+    refresh.disabled = true;
     return;
   }
 
@@ -2034,6 +2041,39 @@ function renderDraftPreviewItem() {
     media.controls = true;
     media.playsInline = true;
     frame.append(media);
+  } else if (item.kind === 'web') {
+    const url = safePreviewUrl(item.source_url);
+    if (!url) {
+      addPreviewMessage(frame, 'Webbsidan saknar en giltig HTTP- eller HTTPS-adress.');
+    } else {
+      const iframe = document.createElement('iframe');
+      iframe.className = 'draft-preview-web';
+      iframe.src = url.href;
+      iframe.title = item.title || 'Live-dashboard';
+      iframe.referrerPolicy = 'no-referrer';
+      iframe.loading = 'eager';
+      iframe.setAttribute('sandbox', url.origin === location.origin
+        ? 'allow-scripts allow-forms allow-popups'
+        : 'allow-scripts allow-forms allow-popups allow-same-origin');
+      iframe.addEventListener('load', () => {
+        if (generation !== draftPreviewGeneration) return;
+        const status = frame.querySelector('[data-preview-live-status]');
+        if (status) status.textContent = 'Webbsidan har laddats. Om den blockerar inbäddning kan du öppna källan separat.';
+      }, { once: true });
+      frame.append(iframe);
+      const open = document.createElement('a');
+      open.className = 'draft-preview-open-link';
+      open.href = url.href;
+      open.target = '_blank';
+      open.rel = 'noopener noreferrer';
+      open.textContent = 'Öppna i ny flik ↗';
+      frame.append(open);
+      addPreviewMessage(frame, 'Laddar live-webbsida…');
+    }
+  } else if (item.kind === 'feed') {
+    addPreviewMessage(frame, 'Hämtar aktuella data från feeden…');
+    draftPreviewAbortController = new AbortController();
+    loadDraftFeedPreview(item, frame, generation, draftPreviewAbortController.signal);
   } else {
     const content = document.createElement('div');
     content.className = 'draft-preview-copy';
@@ -2043,8 +2083,6 @@ function renderDraftPreviewItem() {
     const body = document.createElement('p');
     if (item.kind === 'text') body.textContent = item.body || '';
     else if (item.kind === 'clock') body.textContent = `${item.body || ''}${item.body ? ' · ' : ''}${new Intl.DateTimeFormat('sv-SE', { dateStyle: 'full', timeStyle: 'short' }).format(new Date())}`;
-    else if (item.kind === 'feed') body.textContent = 'Live-data hämtas av TV-spelaren när innehållet publiceras.';
-    else if (item.kind === 'web') body.textContent = 'Webbsidan öppnas av TV-spelaren efter publicering. Inbäddad förhandsvisning kan blockeras av källans säkerhetsinställningar.';
     else body.textContent = item.body || 'Förhandsvisning av utkast';
     content.append(body);
     frame.append(content);
@@ -2057,11 +2095,181 @@ function renderDraftPreviewItem() {
   position.textContent = `${draftPreviewIndex + 1} av ${draftPreviewItems.length}`;
   previous.disabled = draftPreviewIndex === 0;
   next.disabled = draftPreviewIndex >= draftPreviewItems.length - 1;
+  refresh.disabled = !['feed','web'].includes(item.kind);
+}
+
+function safePreviewUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || /#token=/i.test(url.hash)) return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function addPreviewMessage(frame, message, error = false) {
+  const status = document.createElement('div');
+  status.className = `draft-preview-live-status${error ? ' error' : ''}`;
+  status.dataset.previewLiveStatus = '';
+  status.textContent = message;
+  frame.append(status);
+  return status;
+}
+
+async function loadDraftFeedPreview(item, frame, generation, signal) {
+  let payload;
+  let fetchedAt;
+  if (item.integration_id) {
+    const { data, error } = await supabase.functions.invoke('preview-signage-feed', {
+      body: { integration_id: item.integration_id }
+    });
+    if (generation !== draftPreviewGeneration) return;
+    if (error) {
+      const status = frame.querySelector('[data-preview-live-status]');
+      if (status) { status.classList.add('error'); status.textContent = error.message || 'Kunde inte hämta live-data från Pulse.'; }
+      return;
+    }
+    payload = data?.payload;
+    fetchedAt = data?.fetched_at;
+  } else {
+    const url = safePreviewUrl(item.source_url);
+    if (!url) {
+      const status = frame.querySelector('[data-preview-live-status]');
+      if (status) { status.classList.add('error'); status.textContent = 'Feeden saknar en giltig HTTP- eller HTTPS-adress.'; }
+      return;
+    }
+    let timeout;
+    try {
+      timeout = setTimeout(() => {
+        if (generation === draftPreviewGeneration) draftPreviewAbortController?.abort();
+      }, 10_000);
+      const response = await fetch(url.href, {
+        cache: 'no-store',
+        credentials: 'omit',
+        headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' },
+        signal
+      });
+      if (!response.ok) throw new Error(`Källan svarade med HTTP ${response.status}.`);
+      if (Number(response.headers.get('content-length') || 0) > 1_500_000) throw new Error('Feed-svaret är för stort för en förhandsvisning.');
+      payload = await response.json();
+      fetchedAt = new Date().toISOString();
+    } catch (error) {
+      if (generation !== draftPreviewGeneration) return;
+      const status = frame.querySelector('[data-preview-live-status]');
+      if (status) {
+        status.classList.add('error');
+        status.textContent = error instanceof DOMException && error.name === 'AbortError'
+          ? 'Feeden svarade inte inom tio sekunder.'
+          : error instanceof TypeError
+          ? 'Webbläsaren kunde inte läsa feeden. Källan måste tillåta CORS; öppna den på TV:n för att verifiera faktisk åtkomst.'
+          : error.message || 'Kunde inte läsa live-data.';
+      }
+      return;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  if (generation !== draftPreviewGeneration) return;
+  renderLiveFeedPreview(item, payload, fetchedAt, frame);
+}
+
+function renderLiveFeedPreview(item, payload, fetchedAt, frame) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    const status = frame.querySelector('[data-preview-live-status]');
+    if (status) { status.classList.add('error'); status.textContent = 'Feeden returnerade inte ett JSON-objekt.'; }
+    return;
+  }
+  frame.querySelector('[data-preview-live-status]')?.remove();
+  const dashboard = document.createElement('div');
+  dashboard.className = 'draft-preview-dashboard';
+  const header = document.createElement('header');
+  const title = document.createElement('strong');
+  title.textContent = String(payload.title || item.title || 'Live-dashboard');
+  const subtitle = document.createElement('span');
+  subtitle.textContent = String(payload.subtitle || payload.message || '');
+  header.append(title, subtitle);
+  const timestamp = payload.updated_at || payload.generated_at || payload.timestamp || fetchedAt;
+  const freshness = document.createElement('small');
+  const parsed = timestamp ? new Date(timestamp) : null;
+  freshness.textContent = parsed && !Number.isNaN(parsed.getTime())
+    ? `LIVE · data uppdaterad ${parsed.toLocaleString('sv-SE')}`
+    : `LIVE · hämtad ${new Date(fetchedAt || Date.now()).toLocaleTimeString('sv-SE')}`;
+  header.append(freshness);
+  dashboard.append(header);
+
+  const metrics = Array.isArray(payload.metrics) ? payload.metrics.slice(0, 6) : [];
+  if (!metrics.length && payload.global && typeof payload.global === 'object' && !Array.isArray(payload.global)) {
+    for (const [label, value] of Object.entries(payload.global)) {
+      if (value == null || typeof value === 'object') continue;
+      metrics.push({ label, value });
+      if (metrics.length === 6) break;
+    }
+  }
+  if (metrics.length) {
+    const grid = document.createElement('div');
+    grid.className = 'draft-preview-metrics';
+    metrics.forEach(metric => {
+      if (!metric || typeof metric !== 'object') return;
+      const card = document.createElement('article');
+      const label = document.createElement('small');
+      label.textContent = String(metric.label || metric.title || metric.name || 'MÄTVÄRDE').toLocaleUpperCase('sv-SE');
+      const value = document.createElement('strong');
+      value.textContent = previewValue(metric.value ?? metric.text ?? '–');
+      const detail = document.createElement('span');
+      detail.textContent = String(metric.detail || metric.trend || metric.subtitle || '');
+      card.append(label, value, detail);
+      grid.append(card);
+    });
+    dashboard.append(grid);
+  }
+
+  const listKey = ['items','alerts','rows','organizations','regions'].find(key => Array.isArray(payload[key]) && payload[key].length);
+  const rows = listKey ? payload[listKey].slice(0, 10) : [];
+  if (rows.length) {
+    const list = document.createElement('div');
+    list.className = 'draft-preview-live-list';
+    const listTitle = document.createElement('strong');
+    listTitle.textContent = String(payload.items_title || payload.section_title || listKey).toLocaleUpperCase('sv-SE');
+    list.append(listTitle);
+    rows.forEach((row, index) => {
+      const line = document.createElement('article');
+      const name = document.createElement('strong');
+      name.textContent = String(row?.title || row?.name || row?.label || `Post ${index + 1}`);
+      const detail = document.createElement('span');
+      detail.textContent = String(row?.subtitle || row?.description || row?.detail || row?.organization_name || '');
+      const status = document.createElement('small');
+      status.textContent = String(row?.status || row?.severity || row?.value || '');
+      line.append(name, detail, status);
+      list.append(line);
+    });
+    dashboard.append(list);
+  }
+
+  if (!metrics.length && !rows.length) {
+    const message = document.createElement('p');
+    message.className = 'draft-preview-live-empty';
+    message.textContent = String(payload.message || payload.value || payload.text || 'Live-data kom fram. Feeden saknar fält som kan visas som mätvärden eller lista.');
+    dashboard.append(message);
+  }
+  frame.append(dashboard);
+}
+
+function previewValue(value) {
+  if (typeof value === 'string') return value;
+  if (value == null) return '–';
+  try { return JSON.stringify(value); } catch { return String(value); }
 }
 
 $('#draftPreviewDialog').querySelector('[data-preview-close]').addEventListener('click', () => $('#draftPreviewDialog').close());
 $('[data-preview-prev]').addEventListener('click', () => { draftPreviewIndex = Math.max(0, draftPreviewIndex - 1); renderDraftPreviewItem(); });
 $('[data-preview-next]').addEventListener('click', () => { draftPreviewIndex = Math.min(draftPreviewItems.length - 1, draftPreviewIndex + 1); renderDraftPreviewItem(); });
+$('[data-preview-refresh]').addEventListener('click', renderDraftPreviewItem);
+$('#draftPreviewDialog').addEventListener('close', () => {
+  draftPreviewGeneration++;
+  draftPreviewAbortController?.abort();
+  $('[data-preview-stage]').replaceChildren();
+});
 
 function formatCommandStatus(command) {
   if (!command) return 'Inga fjärrkommandon ännu.';
