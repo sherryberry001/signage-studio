@@ -6,7 +6,7 @@ This document uses ScreenCloud's publicly described product areas as a capabilit
 
 | Product area | Signage Studio today | Work to reach a mature platform |
 | --- | --- | --- |
-| Screen fleet | Native Android TV player, pairing/recovery, groups, online state, current item, live captures, diagnostics, bulk sync/restart | Locations/spaces that own screens and content; stable device identity and duplicate cleanup; configurable health alerts; remote device settings and recovery |
+| Screen fleet | Native Android TV player, pairing/recovery, locations and groups, online state, current item, live captures, diagnostics, bulk sync/restart | Stable device identity and duplicate cleanup; configurable health alerts; remote device settings and recovery |
 | Content library | Text, image, video, web, JSON/Pulse feeds, tags, reuse, expiry, upload to Supabase storage | Resumable uploads, processing/transcoding, folders, document/PDF support, replace-file history, preview and content validation |
 | Authoring | Structured text/feed presentation and TV layouts with ticker or side zone | Screen canvas/editor, reusable brand templates, safe-area/layout preview, schedule-aware preview, reusable app configurations |
 | Playlists | Ordered reusable playlists, screen assignment, multi-zone support | Draft state, version history, duplicate/copy workflows, randomized playback, publish acknowledgements |
@@ -21,7 +21,7 @@ This document uses ScreenCloud's publicly described product areas as a capabilit
 ## Delivery sequence
 
 1. **Safe publishing:** separate working changes from live content; preview a channel; publish atomically; retain the last published version; restore or discard drafts; show which screens acknowledged the new version.
-2. **Locations and governance:** introduce spaces as a real access boundary for screens, channels, playlists, media, and team membership; preserve existing groups as labels/collections during migration.
+2. **Locations and governance:** provide location-based screen and content read access, then extend it to granular editing and publishing permissions while preserving existing group grants.
 3. **Creation and media reliability:** resumable uploads, replacement/version history, native layouts/templates, and a clear preview for the target TV aspect ratio.
 4. **Broadcast and workflow:** approval states, publisher permissions, emergency/temporary announcements, target selection, expiry, and delivery receipts.
 5. **Integrations and APIs:** connector contract, credential lifecycle, health diagnostics, prioritized OAuth integrations, webhooks, and public API documentation.

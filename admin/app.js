@@ -13,6 +13,8 @@ let currentUser = null;
 let screens = [];
 let screenGroups = [];
 let screenGroupMembers = [];
+let locations = [];
+let locationMembers = [];
 let playlists = [];
 let playlistSlides = [];
 let channels = [];
@@ -144,6 +146,8 @@ function setSession(user) {
     screens = [];
     screenGroups = [];
     screenGroupMembers = [];
+    locations = [];
+    locationMembers = [];
     playlists = [];
     playlistSlides = [];
     channels = [];
@@ -213,7 +217,8 @@ $('#createScreenForm').addEventListener('submit', async event => {
   submit.disabled = true;
   try {
     const group_id = $('#newScreenGroup').value || null;
-    const { error } = await supabase.from('screens').insert({ name, pair_code, group_id, is_active: true });
+    const location_id = $('#newScreenLocation').value || null;
+    const { error } = await supabase.from('screens').insert({ name, pair_code, group_id, location_id, is_active: true });
     if (error) {
       if (error.code === '23505' && `${error.message} ${error.details || ''}`.includes('screens_name_ci_active_idx')) {
         await loadScreens();
@@ -241,6 +246,71 @@ $('#createScreenGroupForm').addEventListener('submit', async event => {
   if (error) return toast(error.message, true);
   form.reset();
   toast(`Gruppen ”${name}” skapades.`);
+  await loadScreens();
+});
+
+$('#createLocationForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (currentRole !== 'admin') return;
+  const form = event.currentTarget;
+  const values = new FormData(form);
+  const name = String(values.get('name') || '').trim();
+  const description = String(values.get('description') || '').trim();
+  if (!name) return toast('Ange ett namn på platsen.', true);
+  const { error } = await supabase.from('locations').insert({ name, description, created_by: currentUser.id });
+  if (error) return toast(error.message, true);
+  form.reset();
+  toast(`Platsen ”${name}” skapades.`);
+  await loadScreens();
+});
+
+$('#locationList').addEventListener('submit', async event => {
+  const addMemberForm = event.target.closest('[data-location-member-add]');
+  if (addMemberForm) {
+    event.preventDefault();
+    const user_id = String(new FormData(addMemberForm).get('user_id') || '');
+    if (!user_id) return toast('Välj en gruppmedlem först.', true);
+    const { error } = await supabase.from('location_members').insert({ location_id: addMemberForm.dataset.locationMemberAdd, user_id });
+    if (error) return toast(error.message, true);
+    toast('Platsåtkomsten sparades. Medlemmen kan nu läsa skärmar och innehåll på platsen.');
+    await loadScreens();
+    return;
+  }
+  const form = event.target.closest('[data-location-edit]');
+  if (!form || currentRole !== 'admin') return;
+  event.preventDefault();
+  const values = new FormData(form);
+  const name = String(values.get('name') || '').trim();
+  const description = String(values.get('description') || '').trim();
+  if (!name) return toast('Platsnamnet får inte vara tomt.', true);
+  const { error } = await supabase.from('locations').update({ name, description, updated_at: new Date().toISOString() }).eq('id', form.dataset.locationEdit);
+  if (error) return toast(error.message, true);
+  toast('Platsen uppdaterades.');
+  await loadScreens();
+});
+
+$('#locationList').addEventListener('click', async event => {
+  const removeMember = event.target.closest('[data-location-member-delete]');
+  if (removeMember && currentRole === 'admin') {
+    const member = locationMembers.find(item => item.id === removeMember.dataset.locationMemberDelete);
+    if (!member) return;
+    const name = teamMembers.find(item => item.user_id === member.user_id)?.email || 'medlemmen';
+    if (!confirm(`Ta bort ${name} från platsen? Personen förlorar då läsåtkomsten till platsens skärmar och innehåll.`)) return;
+    const { error } = await supabase.from('location_members').delete().eq('id', member.id);
+    if (error) return toast(error.message, true);
+    toast('Platsåtkomsten togs bort.');
+    await loadScreens();
+    return;
+  }
+  const button = event.target.closest('[data-location-delete]');
+  if (!button || currentRole !== 'admin') return;
+  const location = locations.find(item => item.id === button.dataset.locationDelete);
+  if (!location) return;
+  const members = locationMembers.filter(item => item.location_id === location.id).length;
+  if (!confirm(`Ta bort platsen ”${location.name}”? ${members ? `${members} medlemmar förlorar sin platsåtkomst. ` : ''}Det går inte att ångra.`)) return;
+  const { error } = await supabase.from('locations').delete().eq('id', location.id);
+  if (error) return toast(error.message, true);
+  toast('Platsen togs bort.');
   await loadScreens();
 });
 
@@ -486,7 +556,9 @@ async function loadScreens() {
     { data: approvalData, error: approvalError },
     { data: mediaData, error: mediaError },
     { data: groupData, error: groupError },
-    { data: groupMemberData, error: groupMemberError }
+    { data: groupMemberData, error: groupMemberError },
+    { data: locationData, error: locationError },
+    { data: locationMemberData, error: locationMemberError }
   ] = await Promise.all([
     supabase.from('screens').select('*').order('created_at', { ascending: false }),
     supabase.from('playlists').select('*').order('name', { ascending: true }),
@@ -499,7 +571,9 @@ async function loadScreens() {
     supabase.from('screen_publication_requests').select('id,screen_id,status,requested_by,requested_at,reviewed_by,reviewed_at,review_note').order('requested_at', { ascending: false }).limit(200),
     supabase.from('media_library').select('*').order('updated_at', { ascending: false }).limit(300),
     supabase.from('screen_groups').select('*').order('name', { ascending: true }),
-    supabase.from('screen_group_members').select('id,group_id,user_id,created_at').order('created_at', { ascending: true })
+    supabase.from('screen_group_members').select('id,group_id,user_id,created_at').order('created_at', { ascending: true }),
+    supabase.from('locations').select('id,name,description,created_at').order('name', { ascending: true }),
+    supabase.from('location_members').select('id,location_id,user_id,created_at').order('created_at', { ascending: true })
   ]);
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
@@ -514,6 +588,8 @@ async function loadScreens() {
   if (mediaError && mediaError.code !== '42P01') return toast(mediaError.message, true);
   if (groupError) return toast(groupError.message, true);
   if (groupMemberError) return toast(groupMemberError.message, true);
+  if (locationError) return toast(locationError.message, true);
+  if (locationMemberError) return toast(locationMemberError.message, true);
   teamMembers = memberData || [];
   currentRole = teamMembers.find(member => member.user_id === userId)?.role || null;
   updateRoleVisibility();
@@ -522,6 +598,8 @@ async function loadScreens() {
     screens = [];
     screenGroups = [];
     screenGroupMembers = [];
+    locations = [];
+    locationMembers = [];
     playlists = [];
     screenList.replaceChildren();
     $('#emptyState').classList.add('hidden');
@@ -559,6 +637,8 @@ async function loadScreens() {
   renderPlaybackScreenOptions();
   screenGroups = nextScreenGroups;
   screenGroupMembers = groupMemberData || [];
+  locations = locationData || [];
+  locationMembers = locationMemberData || [];
   playlists = nextPlaylists;
   playlistSlides = playlistSlideData || [];
   channels = nextChannels;
@@ -576,6 +656,7 @@ async function loadScreens() {
   updateChannelControls();
   updateChannelManagement();
   renderScreenGroups();
+  renderLocations();
   renderPlaylistLibrary();
   renderMediaLibrary();
   $('#emptyState').classList.toggle('hidden', screens.length > 0);
@@ -657,6 +738,34 @@ function updateChannelControls() {
 
 function screenGroupOptions(selectedId = '') {
   return `<option value="">Ingen grupp</option>${screenGroups.map(group => `<option value="${esc(group.id)}" ${group.id === selectedId ? 'selected' : ''}>${esc(group.name)}</option>`).join('')}`;
+}
+
+function screenLocationOptions(selectedId = '', includeNone = true) {
+  return `${includeNone ? '<option value="">Ingen plats</option>' : ''}${locations.map(location => `<option value="${esc(location.id)}" ${location.id === selectedId ? 'selected' : ''}>${esc(location.name)}</option>`).join('')}`;
+}
+
+function renderLocations() {
+  const admin = currentRole === 'admin';
+  const locationSelect = $('#newScreenLocation');
+  const previousLocation = locationSelect.value;
+  locationSelect.innerHTML = screenLocationOptions(previousLocation);
+  if (locations.some(location => location.id === previousLocation)) locationSelect.value = previousLocation;
+  else if (locations.length) locationSelect.value = locations[0].id;
+
+  const list = $('#locationList');
+  list.replaceChildren(...locations.map(location => {
+    const screensInLocation = screens.filter(screen => screen.location_id === location.id);
+    const members = locationMembers.filter(member => member.location_id === location.id);
+    const assignedUsers = new Set(members.map(member => member.user_id));
+    const availableMembers = teamMembers.filter(member => member.role === 'group_member' && !assignedUsers.has(member.user_id));
+    const card = document.createElement('article');
+    card.className = 'location-card';
+    card.innerHTML = admin
+      ? `<div class="location-card-heading"><form class="location-edit-form" data-location-edit="${esc(location.id)}"><input name="name" value="${esc(location.name)}" maxlength="80" required aria-label="Platsnamn" /><input name="description" value="${esc(location.description || '')}" maxlength="240" placeholder="Beskrivning" aria-label="Platsbeskrivning" /><button class="button ghost small" type="submit">Spara</button></form><span class="location-screen-count">${screensInLocation.length} skärmar</span><button class="icon-button delete" type="button" data-location-delete="${esc(location.id)}" aria-label="Ta bort plats ${esc(location.name)}" ${screensInLocation.length ? 'disabled title="Flytta skärmarna från platsen först."' : ''}>×</button></div><div class="location-access"><strong>Platsåtkomst · ${members.length}</strong><div class="location-members">${members.map(member => `<span class="location-member">${esc(teamMembers.find(user => user.user_id === member.user_id)?.email || 'Okänd medlem')}<button class="icon-button delete" type="button" data-location-member-delete="${esc(member.id)}" aria-label="Ta bort platsåtkomst">×</button></span>`).join('') || '<span class="screen-groups-empty">Inga platsmedlemmar.</span>'}</div><form class="location-member-add" data-location-member-add="${esc(location.id)}"><select name="user_id" aria-label="Gruppmedlem att lägga till på platsen" required><option value="">Lägg till gruppmedlem</option>${availableMembers.map(member => `<option value="${esc(member.user_id)}">${esc(member.email)}</option>`).join('')}</select><button class="button ghost small" type="submit" ${availableMembers.length ? '' : 'disabled'}>Lägg till</button>${availableMembers.length ? '' : '<span class="screen-groups-empty">Skapa först en gruppmedlem under Team.</span>'}</form></div>`
+      : `<div class="location-card-heading"><div><strong>${esc(location.name)}</strong><span>${esc(location.description || '')}</span></div><span class="location-screen-count">${screensInLocation.length} skärmar</span></div>`;
+    return card;
+  }));
+  if (!locations.length) list.innerHTML = '<span class="screen-groups-empty">Skapa en plats och tilldela sedan skärmar eller gruppmedlemmar.</span>';
 }
 
 function renderScreenGroups() {
@@ -1799,6 +1908,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     <div class="screen-body">
       <p class="pair-help">${screen.pair_code ? 'Öppna Signage Player på TV:n och skriv koden ovan. Koden kan bara användas en gång.' : 'TV:n är parkopplad. Publicerat innehåll synkas till spelaren och sparas lokalt för offlinevisning.'}</p>
       <details class="screen-health-history"><summary>Drifthistorik</summary><div class="screen-health-events" data-screen-health-events>Öppna för att läsa skärmens senaste online- och offlinehändelser.</div></details>
+      <label class="screen-location-assignment ${canAdmin ? '' : 'hidden'}">Plats<select class="screen-location-select">${screenLocationOptions(screen.location_id || '')}</select><span>Platsmedlemmar får läsåtkomst till skärmens publicerade innehåll och historik.</span></label>
       <label class="screen-group-assignment ${canAdmin ? '' : 'hidden'}">Skärmgrupp<select class="screen-group-select">${screenGroupOptions(screen.group_id || '')}</select><span>Använd grupper för att sortera skärmar efter plats eller team.</span></label>
       <form class="screen-operating-form ${canAdmin ? '' : 'hidden'}"><div class="operating-heading"><strong>Öppettider</strong><span>TV:n visar svart utanför tiderna men fortsätter vara ansluten. Tider följer TV:ns lokala klocka.</span></div><div class="operating-days">${operatingDays.map(([day, label]) => `<label><input type="checkbox" name="operating_weekdays" value="${day}" ${selectedOperatingDays.includes(day) ? 'checked' : ''} /><span>${label}</span></label>`).join('')}</div><div class="operating-times"><label>Från<input name="operating_start_time" type="time" value="${esc(screen.operating_start_time || '')}" /></label><label>Till<input name="operating_end_time" type="time" value="${esc(screen.operating_end_time || '')}" /></label></div><button class="button ghost small" type="submit">Spara öppettider</button></form>
       <label class="screen-playback-setting ${canAdmin ? '' : 'hidden'}">Uppspelningsläge<select class="screen-playback-mode"><option value="independent" ${screen.playback_mode !== 'sync' ? 'selected' : ''}>Fristående · starta lokalt</option><option value="sync" ${screen.playback_mode === 'sync' ? 'selected' : ''}>Synkad · gemensam tidslinje</option></select><span>Synka skärmar med samma aktiva innehållssekvens och schema. TV-enheterna behöver rätt klocka.</span></label>
@@ -1875,6 +1985,13 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     const { error } = await supabase.from('screens').update({ group_id }).eq('id', screen.id);
     if (error) return toast(error.message, true);
     toast(`”${screen.name}” flyttades till ”${screenGroups.find(group => group.id === group_id)?.name || 'Ingen grupp'}”.`);
+    await loadScreens();
+  });
+  card.querySelector('.screen-location-select').addEventListener('change', async event => {
+    const location_id = event.currentTarget.value || null;
+    const { error } = await supabase.from('screens').update({ location_id }).eq('id', screen.id);
+    if (error) return toast(error.message, true);
+    toast(`”${screen.name}” flyttades till ”${locations.find(item => item.id === location_id)?.name || 'Ingen plats'}”.`);
     await loadScreens();
   });
   updateCurrentPreview(card.querySelector('.current-preview'), screen, isOnline(screen));

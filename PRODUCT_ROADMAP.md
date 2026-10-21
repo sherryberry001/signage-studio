@@ -2,7 +2,7 @@
 
 Signage Studio should cover the core jobs handled by mature digital-signage platforms while keeping its own product identity and implementation. The target is functional coverage, not a copy of ScreenCloud's branding, source code, or proprietary assets.
 
-See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the researched capability map, delivery sequence, and product guarantees. The immediate development track is safe publishing: drafts, preview, atomic publish, restore/discard, and screen delivery acknowledgements.
+See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the researched capability map, delivery sequence, and product guarantees. The immediate development track is organization-scale access: locations that scope screens and read-only members, followed by granular editing and publishing roles.
 
 ## Current foundation
 
@@ -20,7 +20,7 @@ See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the researched capability
 | Playlists and channels | Reusable playlists with atomic drag or keyboard ordering, recurring schedules, priority, multi-zone, weekly per-screen channel calendar, draft preview, version history, restore and queued player sync | Playlist-level calendar entries and schedule conflict resolution |
 | Live data and apps | Native Pulse/JSON feed and web dashboard support; reusable Pulse connections with protected credentials; per-screen feed status, HTTP/network errors, last success and source host | Expand connector catalog with OAuth-backed business apps, refreshable credentials, and setup health checks |
 | Remote screen operations | Set content, temporary cast, sync, restart, and on-demand screenshot capture | Remote settings, support bundle, guided troubleshooting |
-| Team and organization | Roles, screen groups, group-scoped access, audit log | Spaces/locations, granular content permissions and activity export |
+| Team and organization | Admin/editor/viewer/group-member roles, invitations, screen groups, location-scoped screen/content read access, audit log | Granular creator/publisher/manager permissions, activity export, SSO and optional custom roles |
 | Playback reporting | Reported player content transitions, per-screen history, estimated display duration, filters and CSV export | Aggregated proof-of-play analytics, per-content totals and scheduled reports |
 | Player fleet | Android TV player, offline cache and autostart | Managed kiosk mode, player update channel, compatibility matrix and recovery workflow |
 | Creation tools | Structured text and feed presentation | Template-based canvas/editor and reusable branded layouts |
@@ -33,7 +33,7 @@ Screen draft preview and append-only restore are available in the screen cards; 
 2. Make content publishing dependable: library lifecycle, preview, schedule visibility, and predictable caching/offline behavior.
 3. Add operational reporting: playback proof, screen health history, alerts, and exports.
 4. Expand live integrations through a documented connector model; keep secrets in protected storage and show failures clearly.
-5. Add organization-scale workflows: locations/spaces, granular access, approval, and multi-screen publishing.
+5. Extend organization workflows: granular creator/publisher/manager access, exportable audit, SSO, and multi-screen publishing.
 6. Add creation and fleet-management tools after the publishing and reporting foundations are reliable.
 
 ## Product rules
