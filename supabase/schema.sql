@@ -67,7 +67,8 @@ create table if not exists public.screens (
   current_source_url text,
   forced_slide_id uuid,
   playlist_id uuid references public.playlists(id) on delete set null,
-  group_id uuid
+  group_id uuid,
+  playback_mode text not null default 'independent'
 );
 
 create table if not exists public.screen_groups (
@@ -81,6 +82,10 @@ create table if not exists public.screen_groups (
 alter table public.screens add column if not exists group_id uuid;
 alter table public.screens add column if not exists device_identity text;
 alter table public.screens add column if not exists preview_updated_at timestamptz;
+alter table public.screens add column if not exists playback_mode text not null default 'independent';
+alter table public.screens drop constraint if exists screens_playback_mode_check;
+alter table public.screens add constraint screens_playback_mode_check
+  check (playback_mode in ('independent', 'sync', 'random'));
 alter table public.screens drop constraint if exists screens_group_id_fkey;
 alter table public.screens add constraint screens_group_id_fkey
   foreign key (group_id) references public.screen_groups(id) on delete set null;
