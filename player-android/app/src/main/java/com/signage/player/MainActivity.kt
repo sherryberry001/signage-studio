@@ -593,11 +593,13 @@ class MainActivity : Activity() {
             if (width <= 0 || height <= 0) return@post
             val panel = FrameLayout(this).apply { setBackgroundColor(Color.rgb(28, 37, 53)) }
             if (layout == "bottom_ticker") {
-                val panelHeight = (height * .16f).toInt().coerceAtLeast(80)
+                val tickerPercent = layoutItem?.optInt("layout_ticker_percent", 16)?.coerceIn(10, 25) ?: 16
+                val panelHeight = (height * tickerPercent / 100f).toInt().coerceIn(48, maxOf(48, height / 2))
                 primary.layoutParams = FrameLayout.LayoutParams(-1, height - panelHeight, Gravity.TOP)
                 root.addView(panel, FrameLayout.LayoutParams(-1, panelHeight, Gravity.BOTTOM))
             } else if (layout == "side_panel") {
-                val primaryWidth = (width * .72f).toInt()
+                val splitPercent = layoutItem?.optInt("layout_split_percent", 72)?.coerceIn(55, 85) ?: 72
+                val primaryWidth = (width * splitPercent / 100f).toInt()
                 primary.layoutParams = FrameLayout.LayoutParams(primaryWidth, -1, Gravity.LEFT)
                 root.addView(panel, FrameLayout.LayoutParams(width - primaryWidth, -1, Gravity.RIGHT))
             }

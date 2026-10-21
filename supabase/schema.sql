@@ -68,7 +68,9 @@ create table if not exists public.screens (
   forced_slide_id uuid,
   playlist_id uuid references public.playlists(id) on delete set null,
   group_id uuid,
-  playback_mode text not null default 'independent'
+  playback_mode text not null default 'independent',
+  layout_split_percent integer not null default 72,
+  layout_ticker_percent integer not null default 16
 );
 
 create table if not exists public.screen_groups (
@@ -905,6 +907,14 @@ alter table public.screens add constraint screens_layout_type_check
 alter table public.screens drop constraint if exists screens_layout_text_check;
 alter table public.screens add constraint screens_layout_text_check
   check (char_length(layout_text) <= 500);
+alter table public.screens add column if not exists layout_split_percent integer not null default 72;
+alter table public.screens add column if not exists layout_ticker_percent integer not null default 16;
+alter table public.screens drop constraint if exists screens_layout_split_percent_check;
+alter table public.screens add constraint screens_layout_split_percent_check
+  check (layout_split_percent between 55 and 85);
+alter table public.screens drop constraint if exists screens_layout_ticker_percent_check;
+alter table public.screens add constraint screens_layout_ticker_percent_check
+  check (layout_ticker_percent between 10 and 25);
 
 create or replace function public.player_playlist(input_screen_id uuid)
 returns setof jsonb
@@ -2279,16 +2289,31 @@ as $$
 declare
   next_revision integer;
   content_snapshot jsonb;
+  split_percent integer;
+  ticker_percent integer;
 begin
   if coalesce(public.current_team_role(), '') not in ('admin','editor') then
     raise exception 'Only admins and editors can publish screen content' using errcode = '42501';
   end if;
   perform pg_advisory_xact_lock(hashtextextended(input_screen_id::text, 71));
-  perform 1 from public.screens where id = input_screen_id and is_active = true for update;
+  select sc.layout_split_percent, sc.layout_ticker_percent
+    into split_percent, ticker_percent
+  from public.screens sc
+  where sc.id = input_screen_id and sc.is_active = true
+  for update;
   if not found then raise exception 'Screen was not found or is paused'; end if;
 
   select coalesce(jsonb_agg(
-    jsonb_set(jsonb_set(item, '{forced}', 'false'::jsonb, true), '{forced_until}', 'null'::jsonb, true)
+    jsonb_set(
+      jsonb_set(
+        jsonb_set(
+          jsonb_set(item, '{forced}', 'false'::jsonb, true),
+          '{forced_until}', 'null'::jsonb, true
+        ),
+        '{layout_split_percent}', to_jsonb(split_percent), true
+      ),
+      '{layout_ticker_percent}', to_jsonb(ticker_percent), true
+    )
     order by (item->>'channel_priority')::integer,
       (item->>'channel_playlist_priority')::integer,
       (item->>'channel_playlist_order')::integer,
