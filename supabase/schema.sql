@@ -1906,7 +1906,7 @@ alter table public.screens
 
 do $$ begin
   alter table public.screens add constraint screens_playback_mode_check
-    check (playback_mode in ('independent', 'sync'));
+    check (playback_mode in ('independent', 'sync', 'random'));
 exception when duplicate_object then null;
 end $$;
 
