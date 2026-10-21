@@ -584,18 +584,40 @@ $('#createChannelForm').addEventListener('submit', async event => {
 });
 
 $('#channelManagementList').addEventListener('submit', async event => {
+  const editForm = event.target.closest('[data-channel-playlist-edit]');
+  if (editForm) {
+    event.preventDefault();
+    const values = new FormData(editForm);
+    const schedule = scheduleValues(values);
+    if (!schedule) return;
+    const priority = schedulePriority(values);
+    if (priority === null) return;
+    const channel_id = editForm.dataset.channelId;
+    const { error } = await supabase.from('channel_playlists')
+      .update({ priority, ...schedule })
+      .eq('id', editForm.dataset.channelPlaylistEdit)
+      .eq('channel_id', channel_id);
+    if (error) return toast(error.message, true);
+    const affectedScreens = new Set(channelSchedules.filter(item => item.channel_id === channel_id).map(item => item.screen_id));
+    const affectedLabel = affectedScreens.size === 1 ? '1 berörd skärm' : `${affectedScreens.size} berörda skärmar`;
+    toast(`Kanalspellistans tider och prioritet sparades som utkast. Publicera ${affectedLabel} för att skicka ändringen till TV:n.`);
+    await loadScreens();
+    return;
+  }
   const form = event.target.closest('.channel-playlist-form');
   if (!form) return;
   event.preventDefault();
   const values = new FormData(form);
   const schedule = scheduleValues(values);
   if (!schedule) return;
+  const priority = schedulePriority(values);
+  if (priority === null) return;
   const channel_id = form.dataset.channelId;
   const playlist_id = String(values.get('playlist_id') || '');
   if (channelPlaylists.some(item => item.channel_id === channel_id && item.playlist_id === playlist_id)) return toast('Spellistan finns redan i kanalen.', true);
   const { data: last, error: orderError } = await supabase.from('channel_playlists').select('sort_order').eq('channel_id', channel_id).order('sort_order', { ascending: false }).limit(1).maybeSingle();
   if (orderError) return toast(orderError.message, true);
-  const { error } = await supabase.from('channel_playlists').insert({ channel_id, playlist_id, sort_order: (last?.sort_order ?? -1) + 1, priority: Number(values.get('priority')) || 100, ...schedule });
+  const { error } = await supabase.from('channel_playlists').insert({ channel_id, playlist_id, sort_order: (last?.sort_order ?? -1) + 1, priority, ...schedule });
   if (error) return toast(error.message, true);
   toast('Spellistan och schemat sparades som utkast. Publicera från varje berörd skärm när du är klar.');
   await loadScreens();
@@ -1051,7 +1073,7 @@ function updateChannelManagement() {
     const available = playlists.filter(playlist => !usedIds.has(playlist.id));
     const card = document.createElement('article');
     card.className = 'channel-manage-card';
-    card.innerHTML = `<div class="channel-manage-heading"><strong>${esc(channel.name)}</strong><span>${memberships.length} spellistor</span></div><div class="channel-playlist-items">${memberships.map(item => { const playlist = playlists.find(value => value.id === item.playlist_id); return `<div class="channel-playlist-item"><div><strong>${esc(playlist?.name || 'Okänd spellista')}</strong><span>Prioritet ${item.priority} · ordning ${item.sort_order + 1} · ${scheduleSummary(item)}</span></div><button class="button ghost small" type="button" data-channel-playlist-remove="${esc(item.id)}" ${canEdit ? '' : 'hidden'}>Ta bort</button></div>`; }).join('') || '<div class="slide-sub">Kanalen har inga spellistor.</div>'}</div>${canEdit ? `<form class="channel-playlist-form" data-channel-id="${esc(channel.id)}"><select name="playlist_id" required aria-label="Spellista att lägga till"><option value="">Lägg till spellista</option>${available.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('')}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Prioritet" />${scheduleFields()}<button class="button ghost small" type="submit" ${available.length ? '' : 'disabled'}>＋ Lägg till i kanalen</button></form>` : ''}`;
+    card.innerHTML = `<div class="channel-manage-heading"><strong>${esc(channel.name)}</strong><span>${memberships.length} spellistor</span></div><div class="channel-playlist-items">${memberships.map(item => { const playlist = playlists.find(value => value.id === item.playlist_id); return `<article class="channel-playlist-entry"><div class="channel-playlist-item"><div><strong>${esc(playlist?.name || 'Okänd spellista')}</strong><span>Prioritet ${item.priority} · ordning ${item.sort_order + 1} · ${scheduleSummary(item)}</span></div><button class="button ghost small" type="button" data-channel-playlist-remove="${esc(item.id)}" ${canEdit ? '' : 'hidden'}>Ta bort</button></div>${canEdit ? `<details class="channel-playlist-edit"><summary>Ändra tider och prioritet</summary><form data-channel-playlist-edit="${esc(item.id)}" data-channel-id="${esc(channel.id)}"><label>Prioritet<input name="priority" type="number" min="0" max="1000" value="${Number(item.priority)}" required /></label>${scheduleFields(item)}<button class="button ghost small" type="submit">Spara ändringar som utkast</button></form></details>` : ''}</article>`; }).join('') || '<div class="slide-sub">Kanalen har inga spellistor.</div>'}</div>${canEdit ? `<form class="channel-playlist-form" data-channel-id="${esc(channel.id)}"><select name="playlist_id" required aria-label="Spellista att lägga till"><option value="">Lägg till spellista</option>${available.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('')}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Prioritet" />${scheduleFields()}<button class="button ghost small" type="submit" ${available.length ? '' : 'disabled'}>＋ Lägg till i kanalen</button></form>` : ''}`;
     return card;
   }));
   if (!channels.length) container.innerHTML = '<div class="slide-sub">Skapa en kanal och välj dess första spellista ovan.</div>';
@@ -2937,9 +2959,10 @@ function renderContentPreview(container, screen) {
   }
 }
 
-function scheduleFields() {
+function scheduleFields(schedule = null) {
   const days = [['1', 'Mån'], ['2', 'Tis'], ['3', 'Ons'], ['4', 'Tor'], ['5', 'Fre'], ['6', 'Lör'], ['7', 'Sön']];
-  return `<div class="schedule-fields"><div class="weekday-picker" aria-label="Återkommande veckodagar">${days.map(([value, label]) => `<label><input type="checkbox" name="weekdays" value="${value}" /><span>${label}</span></label>`).join('')}</div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från datum och tid" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till datum och tid" /></div><div class="inline-fields"><input class="schedule-input" name="daily_from" type="time" aria-label="Visa dagligen från" /><input class="schedule-input" name="daily_until" type="time" aria-label="Visa dagligen till" /></div><span class="schedule-help">Valda dagar och klockslag återkommer varje vecka. Lämna tomt för alltid.</span></div>`;
+  const selectedDays = (schedule?.weekdays || []).map(Number);
+  return `<div class="schedule-fields"><div class="weekday-picker" aria-label="Återkommande veckodagar">${days.map(([value, label]) => `<label><input type="checkbox" name="weekdays" value="${value}" ${selectedDays.includes(Number(value)) ? 'checked' : ''} /><span>${label}</span></label>`).join('')}</div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" value="${esc(localDateTimeInput(schedule?.active_from))}" aria-label="Visa från datum och tid" /><input class="schedule-input" name="until" type="datetime-local" value="${esc(localDateTimeInput(schedule?.active_until))}" aria-label="Visa till datum och tid" /></div><div class="inline-fields"><input class="schedule-input" name="daily_from" type="time" value="${esc(schedule?.daily_start_time || '')}" aria-label="Visa dagligen från" /><input class="schedule-input" name="daily_until" type="time" value="${esc(schedule?.daily_end_time || '')}" aria-label="Visa dagligen till" /></div><span class="schedule-help">Valda dagar och klockslag återkommer varje vecka. Lämna tomt för alltid.</span></div>`;
 }
 
 function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, latestCommand = null, channelSlides = [], publication = null, publicationVersions = [], publicationRequests = []) {
@@ -2978,7 +3001,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
       <label class="screen-autostart-setting ${canAdmin ? '' : 'hidden'}"><span><strong>Starta spelaren när TV:n slås på</strong><small>Spelaren öppnas automatiskt efter omstart eller strömavbrott.</small></span><input class="screen-autostart" type="checkbox" ${screen.autostart_enabled !== false ? 'checked' : ''} aria-label="Starta Signage Player automatiskt vid TV-start" /></label>
       <label class="playlist-assignment ${canAdmin ? '' : 'hidden'}">Spellista för den här skärmen<select class="screen-playlist">${playlistOptions}</select><span>En spellista kan delas av flera skärmar.</span></label>
       <form class="screen-layout-form ${canAdmin ? '' : 'hidden'}"><label>Skärmlayout<select name="layout_type"><option value="single" ${screen.layout_type === 'single' ? 'selected' : ''}>En zon · fullskärm</option><option value="bottom_ticker" ${screen.layout_type === 'bottom_ticker' ? 'selected' : ''}>Huvudyta + ticker längst ned</option><option value="side_panel" ${screen.layout_type === 'side_panel' ? 'selected' : ''}>Huvudyta + sidopanel</option></select></label><label>Spellista i zon 2<select name="zone_playlist_id"><option value="">Visa zontext</option>${playlists.map(playlist => `<option value="${esc(playlist.id)}" ${playlist.id === screen.zone_playlist_id ? 'selected' : ''}>${esc(playlist.name)}</option>`).join('')}</select></label><label class="layout-text-label">Zontext<input name="layout_text" maxlength="500" value="${esc(screen.layout_text || '')}" placeholder="Visas om zonspellistan saknar aktivt innehåll" /></label><button class="button ghost small" type="submit">Spara layout</button></form>
-      <section class="channel-assignment ${canEdit ? '' : 'hidden'}"><div class="channel-heading"><div><strong>Kanalschema</strong><span>Aktiv kanal prioriteras framför skärmens grundspellista. Lägre prioritetstal vinner.</span></div></div><form class="channel-schedule-form"><select name="channel_id" required>${channelOptions}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Kanalprioritet" />${scheduleFields()}<button class="button ghost small" type="submit">＋ Schemalägg kanal</button></form><div class="channel-schedule-list">${assignedChannels.map(item => { const channel = channels.find(c => c.id === item.channel_id); return `<div class="channel-schedule-row"><div><strong>${esc(channel?.name || 'Okänd kanal')}</strong><span>Prioritet ${item.priority} · ${scheduleSummary(item)}</span></div><button class="button ghost small remove-channel-schedule" data-id="${esc(item.id)}">Ta bort</button></div>`; }).join('') || '<div class="slide-sub">Inga kanaler schemalagda för den här skärmen.</div>'}</div></section>
+      <section class="channel-assignment ${canEdit ? '' : 'hidden'}"><div class="channel-heading"><div><strong>Kanalschema</strong><span>Aktiv kanal prioriteras framför skärmens grundspellista. Lägre prioritetstal vinner.</span></div></div><form class="channel-schedule-form"><select name="channel_id" required>${channelOptions}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Kanalprioritet" />${scheduleFields()}<button class="button ghost small" type="submit">＋ Schemalägg kanal</button></form><div class="channel-schedule-list">${assignedChannels.map(item => { const channel = channels.find(c => c.id === item.channel_id); return `<article class="channel-schedule-entry"><div class="channel-schedule-row"><div><strong>${esc(channel?.name || 'Okänd kanal')}</strong><span>Prioritet ${item.priority} · ${scheduleSummary(item)}</span></div><button class="button ghost small remove-channel-schedule" type="button" data-id="${esc(item.id)}">Ta bort</button></div><details class="channel-schedule-edit"><summary>Ändra tider och prioritet</summary><form data-channel-schedule-edit="${esc(item.id)}"><label>Prioritet<input name="priority" type="number" min="0" max="1000" value="${Number(item.priority)}" required /></label>${scheduleFields(item)}<button class="button ghost small" type="submit">Spara schema som utkast</button></form></details></article>`; }).join('') || '<div class="slide-sub">Inga kanaler schemalagda för den här skärmen.</div>'}</div></section>
       <div class="player-operations ${canEdit ? '' : 'hidden'}"><div><strong>Fjärråtgärder</strong><span class="player-command-status" data-command-status>${esc(formatCommandStatus(latestCommand))}</span></div><div class="player-operation-buttons"><button class="button ghost small" data-player-command="sync_now">Synka nu</button><button class="button ghost small" data-player-command="capture_preview" ${isOnline(screen) ? "" : "disabled"} title="${isOnline(screen) ? "Begär en ny skärmbild från TV:n." : "TV:n måste vara online för att skicka en ny skärmbild."}">Uppdatera livebild</button><button class="button ghost small" data-player-command="restart_player">Starta om spelaren</button><button class="button ghost small" data-support-bundle>Hämta felsökningspaket</button></div></div>
       <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id && canEdit ? '' : 'hidden'}">Återgå till spellistan</button></div>
       <div class="playlist">${slides.map((slide, index) => renderSlide(slide, index, slides.length, canEdit)).join('') || '<div class="slide-sub">Spellistan är tom. Lägg till ett objekt nedan.</div>'}</div>
@@ -3156,12 +3179,29 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     const f = new FormData(form);
     const values = scheduleValues(f);
     if (!values) return;
+    const priority = schedulePriority(f);
+    if (priority === null) return;
     if (assignedChannels.some(item => item.channel_id === f.get('channel_id'))) return toast('Den här kanalen är redan tilldelad. Ändra eller ta bort det befintliga schemat.', true);
-    const { error } = await supabase.from('screen_channel_schedules').insert({ screen_id: screen.id, channel_id: String(f.get('channel_id')), priority: Number(f.get('priority')) || 100, ...values });
+    const { error } = await supabase.from('screen_channel_schedules').insert({ screen_id: screen.id, channel_id: String(f.get('channel_id')), priority, ...values });
     if (error) return toast(error.message, true);
     toast('Kanalschemat sparades som utkast. Publicera skärmen för att skicka schemat till TV:n.');
     await loadScreens();
   });
+  card.querySelectorAll('[data-channel-schedule-edit]').forEach(form => form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const values = new FormData(form);
+    const schedule = scheduleValues(values);
+    if (!schedule) return;
+    const priority = schedulePriority(values);
+    if (priority === null) return;
+    const { error } = await supabase.from('screen_channel_schedules')
+      .update({ priority, ...schedule })
+      .eq('id', form.dataset.channelScheduleEdit)
+      .eq('screen_id', screen.id);
+    if (error) return toast(error.message, true);
+    toast('Kanalschemat uppdaterades som utkast. Publicera skärmen för att skicka ändringen till TV:n.');
+    await loadScreens();
+  }));
   card.querySelectorAll('.remove-channel-schedule').forEach(button => button.addEventListener('click', async () => {
     const { error } = await supabase.from('screen_channel_schedules').delete().eq('id', button.dataset.id);
     if (error) return toast(error.message, true);
@@ -3291,6 +3331,16 @@ function scheduleValues(formData) {
     daily_start_time: dailyStart,
     daily_end_time: dailyEnd
   };
+}
+
+function schedulePriority(formData) {
+  const raw = String(formData.get('priority') ?? '').trim();
+  const value = raw === '' ? 100 : Number(raw);
+  if (!Number.isInteger(value) || value < 0 || value > 1000) {
+    toast('Prioriteten ska vara ett heltal mellan 0 och 1000.', true);
+    return null;
+  }
+  return value;
 }
 
 async function addSlide(event, screen, kind) {

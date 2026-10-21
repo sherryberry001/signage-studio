@@ -2,22 +2,22 @@
 
 Signage Studio should cover the core jobs handled by mature digital-signage platforms while keeping its own product identity and implementation. The target is functional coverage, not a copy of ScreenCloud's branding, source code, or proprietary assets.
 
-See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the capability map, delivery sequence, and product guarantees. The active development track is timed broadcast and fleet operations, then richer authoring, connector coverage, and organization controls.
+See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the capability map, delivery sequence, and product guarantees. The active development track is conflict-safe scheduling and authoring, then connector coverage, fleet lifecycle, and organization controls.
 
 ## Current foundation
 
 - Native Android TV player with pairing, heartbeat, offline playback, auto-start, remote sync/restart, live content feeds, multi-zone layouts, schedules, and temporary screen casts.
 - Admin screens for screen inventory, groups, live status, playlists, channels, media, team roles, and audit activity.
 - Supabase-backed authentication, row-level access policies, storage, and GitHub Pages hosting.
-- Live TV screenshots are being added; the player must connect to the network before screenshots and live status can be confirmed on the physical TV.
+- Live TV screenshots and health reporting are available when the player is online; a screenshot confirms the app render, not the physical panel or TV power state.
 
 ## Product coverage
 
 | Area | Current coverage | Next product milestone |
 | --- | --- | --- |
-| Screens and devices | Pairing/recovery, stable player identity, unique active names, groups, locations, online status, previews, bulk actions, remote restart/sync, device diagnostics, scheduled online/offline history, player publication acknowledgements, and downloadable support bundles | Reconcile legacy duplicate profiles; add guided remote troubleshooting and configurable alert thresholds |
-| Content | Text, image, video, web links, JSON feeds, reusable library, expiring media, versioned per-screen publishing snapshots, player revision acknowledgements, and editor-to-admin approval | File replacement/version history, folders, processing/transcoding, reusable native app instances |
-| Playlists and channels | Reusable playlists with atomic drag or keyboard ordering, recurring schedules, priority, multi-zone, weekly per-screen channel calendar, draft preview, version history, restore, queued player sync, delivered revision status, per-screen bulk publishing, and editor approval requests for selected screens | Playlist-level calendar entries and richer schedule conflict resolution |
+| Screens and devices | Pairing/recovery, stable player identity, unique active names, groups, locations, online status, previews, bulk actions, remote restart/sync, device diagnostics, scheduled online/offline history, player publication acknowledgements, and downloadable support bundles | Reconcile legacy duplicate profiles; add guided remote troubleshooting |
+| Content | Text, image, video, web links, JSON feeds, reusable library, expiring media, versioned per-screen publishing snapshots, player revision acknowledgements, and editor-to-admin approval | Processing/transcoding, document/PDF support, reusable native app instances |
+| Playlists and channels | Reusable playlists with atomic drag or keyboard ordering, recurring schedules, priority, multi-zone, weekly per-screen channel calendar, inline channel and screen schedule editing, draft preview, version history, restore, queued player sync, delivered revision status, per-screen bulk publishing, and editor approval requests for selected screens | Playlist-level calendar entries and automatic conflict resolution suggestions |
 | Live data and apps | Native Pulse/JSON feed and web dashboard support; reusable Pulse connections with protected credentials; per-screen feed status, HTTP/network errors, last success and source host | Expand connector catalog with OAuth-backed business apps, refreshable credentials, and setup health checks |
 | Remote screen operations | Set content, temporary cast and multi-screen text/image/video broadcasts with scheduled start, offline-safe expiry, cancel, per-screen reported playback receipts and 30-day history, sync, restart, and on-demand screenshot capture | Remote settings, guided troubleshooting |
 | Team and organization | Admin/editor/viewer/group-member roles, invitations, screen groups, location-scoped screen/content read access, audit log | Granular creator/publisher/manager permissions, activity export, SSO and optional custom roles |
