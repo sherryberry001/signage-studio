@@ -22,6 +22,7 @@ let mediaLibrary = [];
 let activityLog = [];
 let playbackEvents = [];
 let integrationStatuses = [];
+let signageIntegrations = [];
 let currentRole = null;
 let statusTimer = null;
 let activityTimer = null;
@@ -73,6 +74,7 @@ function setWorkspace(workspace) {
   }
   if (workspace === 'proof') loadPlaybackEvents();
   if (workspace === 'integrations') {
+    loadIntegrationCatalog();
     loadIntegrationStatus();
     integrationTimer = setInterval(loadIntegrationStatus, 30000);
   }
@@ -347,11 +349,38 @@ $('#exportPlayback').addEventListener('click', exportPlaybackEvents);
 $('#refreshIntegrations').addEventListener('click', loadIntegrationStatus);
 $('#integrationSearch').addEventListener('input', renderIntegrationStatus);
 $('#integrationFilter').addEventListener('change', renderIntegrationStatus);
+$('#createIntegration').addEventListener('click', () => openIntegrationForm());
+$('#cancelIntegration').addEventListener('click', resetIntegrationForm);
+$('#integrationCatalogList').addEventListener('click', event => {
+  const button = event.target.closest('[data-edit-integration]');
+  if (!button || currentRole !== 'admin') return;
+  openIntegrationForm(signageIntegrations.find(item => item.id === button.dataset.editIntegration));
+});
+
+$('#integrationForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (currentRole !== 'admin') return;
+  const form = event.currentTarget;
+  const values = new FormData(form);
+  const { error } = await supabase.rpc('manage_signage_integration', {
+    input_integration_id: form.dataset.integrationId || null,
+    input_name: String(values.get('name') || '').trim(),
+    input_endpoint_url: String(values.get('endpoint_url') || '').trim(),
+    input_display_token: String(values.get('display_token') || '')
+  });
+  if (error) return toast(error.message, true);
+  toast('Pulse-anslutningen sparades.');
+  resetIntegrationForm();
+  await loadIntegrationCatalog();
+  await loadScreens();
+});
 
 $('#mediaLibraryForm [name="kind"]').addEventListener('change', event => {
   const form = $('#mediaLibraryForm');
   const kind = event.target.value;
   form.querySelector('.feed-refresh-setting').classList.toggle('hidden', kind !== 'feed');
+  form.querySelector('.feed-integration-setting').classList.toggle('hidden', kind !== 'feed' || signageIntegrations.length === 0);
+  syncFeedIntegrationField(form);
   const fileInput = form.querySelector('[name="file"]');
   fileInput.accept = kind === 'image'
     ? 'image/jpeg,image/png,image/webp'
@@ -359,6 +388,7 @@ $('#mediaLibraryForm [name="kind"]').addEventListener('change', event => {
   form.querySelector('.file-label').classList.toggle('hidden', !['image', 'video'].includes(kind));
   form.querySelector('.file-label').firstChild.textContent = kind === 'image' ? 'Bildfil (valfritt) ' : 'Videofil (valfritt) ';
 });
+$('#mediaLibraryForm [name="integration_id"]').addEventListener('change', event => syncFeedIntegrationField(event.currentTarget.form));
 
 $('#mediaLibraryForm').addEventListener('submit', async event => {
   event.preventDefault();
@@ -367,6 +397,9 @@ $('#mediaLibraryForm').addEventListener('submit', async event => {
   const values = new FormData(form);
   const kind = String(values.get('kind'));
   let source_url = String(values.get('source_url') || '').trim();
+  const integration_id = kind === 'feed' ? String(values.get('integration_id') || '') || null : null;
+  const integration = signageIntegrations.find(item => item.id === integration_id);
+  if (integration) source_url = integration.endpoint_url;
   const file = values.get('file');
   if (file instanceof File && file.size > 0) {
     if (!['image', 'video'].includes(kind)) return toast('Välj bild eller video för att ladda upp en fil.', true);
@@ -380,11 +413,13 @@ $('#mediaLibraryForm').addEventListener('submit', async event => {
   }
   const body = String(values.get('body') || '').trim();
   if (['web', 'feed', 'image', 'video'].includes(kind) && !/^https?:\/\//i.test(source_url)) return toast('Ange en giltig HTTP- eller HTTPS-källa eller välj en fil.', true);
+  if (kind === 'feed' && integration_id && !integration) return toast('Den valda Pulse-anslutningen finns inte längre. Ladda om sidan.', true);
+  if (kind === 'feed' && !integration_id && /#token=/i.test(source_url)) return toast('Lägg Pulse-token i en skyddad Pulse-anslutning under Integrationer, inte i feed-URL:en.', true);
   if (kind === 'text' && !body) return toast('Skriv texten som ska sparas i biblioteket.', true);
   const tags = [...new Set(String(values.get('tags') || '').split(',').map(tag => tag.trim().toLocaleLowerCase('sv-SE')).filter(Boolean))];
   const refresh_interval_seconds = kind === 'feed' ? Number(values.get('refresh_interval_seconds') || 30) : 30;
   if (kind === 'feed' && (!Number.isInteger(refresh_interval_seconds) || refresh_interval_seconds < 10 || refresh_interval_seconds > 3600)) return toast('Uppdateringsintervallet ska vara 10–3600 sekunder.', true);
-  const { error } = await supabase.from('media_library').insert({ kind, title: String(values.get('title') || '').trim(), body, source_url: source_url || null, tags, refresh_interval_seconds });
+  const { error } = await supabase.from('media_library').insert({ kind, title: String(values.get('title') || '').trim(), body, source_url: source_url || null, integration_id, tags, refresh_interval_seconds });
   if (error) return toast(error.message, true);
   form.reset();
   $('#mediaLibraryForm [name="kind"]').dispatchEvent(new Event('change'));
@@ -443,6 +478,11 @@ async function loadScreens() {
     $('#emptyState').classList.add('hidden');
     updateScreenSummary();
     return;
+  }
+  if (['admin', 'editor'].includes(currentRole)) await loadIntegrationCatalog();
+  else {
+    signageIntegrations = [];
+    populateFeedIntegrationSelects();
   }
   notice.classList.add('hidden');
   const nextScreens = data || [];
@@ -674,9 +714,16 @@ function renderMediaLibrary() {
   list.replaceChildren(...results.map(item => {
     const row = document.createElement('article');
     row.className = 'media-library-row';
-    row.innerHTML = `<div class="media-library-main"><div class="media-library-detail"><strong>${esc(item.title)}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s${item.kind === 'feed' ? ` · hämtas var ${item.refresh_interval_seconds || 30}s` : ''} ${item.tags?.length ? `· ${item.tags.map(tag => `#${esc(tag)}`).join(' ')}` : ''}</span><small>${esc(item.source_url || item.body || '')}</small></div><details class="media-library-edit" ${['admin','editor'].includes(currentRole) ? '' : 'hidden'}><summary>Redigera</summary><form data-library-edit="${esc(item.id)}"><input name="title" maxlength="120" value="${esc(item.title)}" required aria-label="Namn" /><input name="source_url" type="url" value="${esc(item.source_url || '')}" placeholder="Källans URL" aria-label="Källans URL" /><textarea name="body" maxlength="1200" placeholder="Textinnehåll" aria-label="Textinnehåll">${esc(item.body || '')}</textarea><input name="tags" maxlength="200" value="${esc((item.tags || []).join(', '))}" placeholder="Taggar, separerade med komma" aria-label="Taggar" />${item.kind === 'feed' ? `<label class="feed-refresh-setting">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="${item.refresh_interval_seconds || 30}" required /></label>` : ''}<button class="button ghost small" type="submit">Spara ändringar</button></form></details></div><div class="media-library-actions"><select aria-label="Välj spellista för ${esc(item.title)}" data-library-playlist>${options}</select><button class="button ghost small" type="button" data-library-add="${esc(item.id)}" ${['admin','editor'].includes(currentRole) ? '' : 'disabled'}>Lägg till</button><button class="icon-button delete" type="button" aria-label="Ta bort ${esc(item.title)}" data-library-delete="${esc(item.id)}" ${currentRole === 'admin' || currentRole === 'editor' ? '' : 'hidden'}>×</button></div>`;
+    const integration = signageIntegrations.find(value => value.id === item.integration_id);
+    const sourceLabel = integration ? `Skyddad Pulse · ${integration.name}` : item.source_url || item.body || '';
+    row.innerHTML = `<div class="media-library-main"><div class="media-library-detail"><strong>${esc(item.title)}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s${item.kind === 'feed' ? ` · hämtas var ${item.refresh_interval_seconds || 30}s` : ''} ${item.tags?.length ? `· ${item.tags.map(tag => `#${esc(tag)}`).join(' ')}` : ''}</span><small>${esc(sourceLabel)}</small></div><details class="media-library-edit" ${['admin','editor'].includes(currentRole) ? '' : 'hidden'}><summary>Redigera</summary><form data-library-edit="${esc(item.id)}"><input name="title" maxlength="120" value="${esc(item.title)}" required aria-label="Namn" /><input name="source_url" type="url" value="${esc(item.source_url || '')}" placeholder="Källans URL" aria-label="Källans URL" /><label class="library-integration-setting ${item.kind === 'feed' ? '' : 'hidden'}">Pulse-anslutning<select name="integration_id" data-selected-integration="${esc(item.integration_id || '')}"><option value="">Vanlig JSON-feed</option></select></label><textarea name="body" maxlength="1200" placeholder="Textinnehåll" aria-label="Textinnehåll">${esc(item.body || '')}</textarea><input name="tags" maxlength="200" value="${esc((item.tags || []).join(', '))}" placeholder="Taggar, separerade med komma" aria-label="Taggar" />${item.kind === 'feed' ? `<label class="feed-refresh-setting">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="${item.refresh_interval_seconds || 30}" required /></label>` : ''}<button class="button ghost small" type="submit">Spara ändringar</button></form></details></div><div class="media-library-actions"><select aria-label="Välj spellista för ${esc(item.title)}" data-library-playlist>${options}</select><button class="button ghost small" type="button" data-library-add="${esc(item.id)}" ${['admin','editor'].includes(currentRole) ? '' : 'disabled'}>Lägg till</button><button class="icon-button delete" type="button" aria-label="Ta bort ${esc(item.title)}" data-library-delete="${esc(item.id)}" ${currentRole === 'admin' || currentRole === 'editor' ? '' : 'hidden'}>×</button></div>`;
     return row;
   }));
+  populateFeedIntegrationSelects();
+  list.querySelectorAll('[data-library-edit] [name="integration_id"]').forEach(select => {
+    select.addEventListener('change', () => syncFeedIntegrationField(select.form));
+    syncFeedIntegrationField(select.form);
+  });
   if (!results.length) list.innerHTML = '<div class="slide-sub">Inget innehåll matchar sökningen.</div>';
   list.querySelectorAll('[data-library-edit]').forEach(form => form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -684,14 +731,19 @@ function renderMediaLibrary() {
     const asset = mediaLibrary.find(item => item.id === id);
     const values = new FormData(form);
     const title = String(values.get('title') || '').trim();
-    const source_url = String(values.get('source_url') || '').trim();
+    let source_url = String(values.get('source_url') || '').trim();
+    const integration_id = asset.kind === 'feed' ? String(values.get('integration_id') || '') || null : null;
+    const integration = signageIntegrations.find(item => item.id === integration_id);
+    if (integration) source_url = integration.endpoint_url;
     const body = String(values.get('body') || '').trim();
     if (['web', 'feed', 'image', 'video'].includes(asset.kind) && !/^https?:\/\//i.test(source_url)) return toast('Ange en giltig HTTP- eller HTTPS-källa.', true);
     if (asset.kind === 'text' && !body) return toast('Textinnehållet får inte vara tomt.', true);
     const tags = [...new Set(String(values.get('tags') || '').split(',').map(tag => tag.trim().toLocaleLowerCase('sv-SE')).filter(Boolean))];
     const refresh_interval_seconds = asset.kind === 'feed' ? Number(values.get('refresh_interval_seconds')) : asset.refresh_interval_seconds || 30;
     if (asset.kind === 'feed' && (!Number.isInteger(refresh_interval_seconds) || refresh_interval_seconds < 10 || refresh_interval_seconds > 3600)) return toast('Uppdateringsintervallet ska vara 10–3600 sekunder.', true);
-    const { error } = await supabase.from('media_library').update({ title, source_url: source_url || null, body, tags, refresh_interval_seconds, updated_at: new Date().toISOString() }).eq('id', id);
+    if (integration_id && !integration) return toast('Den valda Pulse-anslutningen finns inte längre. Ladda om sidan.', true);
+    if (asset.kind === 'feed' && !integration_id && /#token=/i.test(source_url)) return toast('Lägg Pulse-token i en skyddad Pulse-anslutning under Integrationer, inte i feed-URL:en.', true);
+    const { error } = await supabase.from('media_library').update({ title, source_url: source_url || null, integration_id, body, tags, refresh_interval_seconds, updated_at: new Date().toISOString() }).eq('id', id);
     if (error) return toast(error.message, true);
     toast('Biblioteksposten och dess spellistereferenser uppdaterades.');
     await loadScreens();
@@ -703,7 +755,7 @@ function renderMediaLibrary() {
     const asset = mediaLibrary.find(item => item.id === button.dataset.libraryAdd);
     const { data: last, error: orderError } = await supabase.from('slides').select('sort_order').eq('playlist_id', playlist_id).order('sort_order', { ascending: false }).limit(1).maybeSingle();
     if (orderError) return toast(orderError.message, true);
-    const { error } = await supabase.from('slides').insert({ playlist_id, screen_id: null, library_asset_id: asset.id, kind: asset.kind, title: asset.title, body: asset.body, source_url: asset.source_url, duration_seconds: asset.duration_seconds, refresh_interval_seconds: asset.refresh_interval_seconds || 30, sort_order: (last?.sort_order ?? -1) + 1, is_active: true });
+    const { error } = await supabase.from('slides').insert({ playlist_id, screen_id: null, library_asset_id: asset.id, integration_id: asset.integration_id, kind: asset.kind, title: asset.title, body: asset.body, source_url: asset.source_url, duration_seconds: asset.duration_seconds, refresh_interval_seconds: asset.refresh_interval_seconds || 30, sort_order: (last?.sort_order ?? -1) + 1, is_active: true });
     if (error) return toast(error.message, true);
     toast(`“${asset.title}” lades till i spellistan.`);
     await loadScreens();
@@ -898,10 +950,79 @@ function renderIntegrationStatus() {
   const errorLabel = item => {
     if (item.status === 'http_error') return `HTTP-fel${item.last_http_status ? ` ${item.last_http_status}` : ''}`;
     if (item.status === 'invalid_json') return 'Svaret är inte giltig JSON';
+    if (item.last_error_code === 'integration_unavailable') return 'Skyddad integration kunde inte hämtas';
     if (item.status === 'network_error') return 'Nätverksfel';
     return 'Ingen felrapport';
   };
   list.innerHTML = rows.map(item => `<article class="integration-card"><div class="integration-card-main"><div class="integration-status-dot ${item.status === 'ok' ? 'ok' : 'error'}"></div><div class="integration-card-copy"><strong>${esc(item.feed_title)}</strong><span>${esc(item.screen_name)} · ${esc(item.source_host || 'Källvärd okänd')}</span><small>${item.status === 'ok' ? 'Senaste hämtning lyckades' : esc(errorLabel(item))} · försök ${esc(formatDate(item.last_attempt_at))}</small><small>Senaste lyckade hämtning · ${esc(formatDate(item.last_success_at))}</small></div></div><span class="integration-status-pill ${item.status === 'ok' ? 'ok' : 'error'}">${item.status === 'ok' ? 'Fungerar' : 'Fel'}</span></article>`).join('');
+}
+
+async function loadIntegrationCatalog() {
+  if (!['admin', 'editor'].includes(currentRole)) return;
+  const { data, error } = await supabase.rpc('team_list_signage_integrations');
+  if (error) {
+    toast(`Kunde inte läsa integrationskatalogen: ${error.message}`, true);
+    return;
+  }
+  signageIntegrations = data || [];
+  renderIntegrationCatalog();
+  populateFeedIntegrationSelects();
+  renderMediaLibrary();
+}
+
+function renderIntegrationCatalog() {
+  const list = $('#integrationCatalogList');
+  if (!list) return;
+  list.innerHTML = signageIntegrations.map(item => `<article class="integration-catalog-card"><div><strong>${esc(item.name)}</strong><span>Dizparc Pulse · ${esc(item.endpoint_url)}</span></div><button class="button ghost small admin-only" type="button" data-edit-integration="${esc(item.id)}">Redigera</button></article>`).join('')
+    || '<div class="activity-empty">Inga skyddade Pulse-anslutningar ännu.</div>';
+  list.querySelectorAll('.admin-only').forEach(control => control.classList.toggle('hidden', currentRole !== 'admin'));
+}
+
+function populateFeedIntegrationSelects() {
+  document.querySelectorAll('select[name="integration_id"]').forEach(select => {
+    const selected = select.value || select.dataset.selectedIntegration || '';
+    select.innerHTML = `<option value="">Vanlig JSON-feed</option>${signageIntegrations.map(item => `<option value="${esc(item.id)}">Pulse · ${esc(item.name)}</option>`).join('')}`;
+    select.value = signageIntegrations.some(item => item.id === selected) ? selected : '';
+    delete select.dataset.selectedIntegration;
+  });
+  const mainForm = $('#mediaLibraryForm');
+  if (mainForm) mainForm.querySelector('.feed-integration-setting').classList.toggle('hidden', mainForm.elements.kind.value !== 'feed' || signageIntegrations.length === 0);
+}
+
+function syncFeedIntegrationField(form) {
+  if (!form) return;
+  const select = form.querySelector('[name="integration_id"]');
+  const source = form.querySelector('[name="source_url"], [name="url"]');
+  if (!select || !source) return;
+  const integration = signageIntegrations.find(item => item.id === select.value);
+  if (integration) {
+    source.value = integration.endpoint_url;
+    source.readOnly = true;
+  } else {
+    source.readOnly = false;
+  }
+}
+
+function resetIntegrationForm() {
+  const form = $('#integrationForm');
+  form.reset();
+  delete form.dataset.integrationId;
+  form.classList.add('hidden');
+  form.querySelector('[name="display_token"]').required = true;
+  form.querySelector('[name="display_token"]').placeholder = 'Pulse display-token (minst 32 tecken)';
+}
+
+function openIntegrationForm(integration = null) {
+  if (currentRole !== 'admin') return;
+  const form = $('#integrationForm');
+  form.reset();
+  form.classList.remove('hidden');
+  form.dataset.integrationId = integration?.id || '';
+  form.elements.name.value = integration?.name || '';
+  form.elements.endpoint_url.value = integration?.endpoint_url || '';
+  form.elements.display_token.required = !integration;
+  form.elements.display_token.placeholder = integration ? 'Ny token (lämna tomt för att behålla)' : 'Pulse display-token (minst 32 tecken)';
+  form.elements.name.focus();
 }
 
 async function loadIntegrationStatus() {
@@ -1211,7 +1332,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
       ${channelSlides.length ? `<details class="screen-channel-content"><summary>Innehåll från skärmens kanaler · ${channelSlides.length} objekt</summary><div class="playlist">${channelSlides.map(slide => `<div class="slide-row"><div class="slide-thumb">${slide.kind === 'image' ? '▧' : slide.kind === 'video' ? '▶' : slide.kind === 'feed' || slide.kind === 'web' ? '↗' : slide.kind === 'clock' ? '◷' : 'T'}</div><div><div class="slide-title">${esc(slide.title || kindLabel(slide.kind))}</div><div class="slide-sub">${esc(kindLabel(slide.kind))} · ${esc(playlists.find(item => item.id === slide.playlist_id)?.name || 'spellista')}</div></div><div class="slide-buttons"><button class="button ghost small channel-show-now" data-id="${esc(slide.id)}" ${canEdit ? '' : 'hidden'}>Visa nu</button></div></div>`).join('')}</div></details>` : ''}
       <div class="slide-add-grid ${canEdit ? '' : 'hidden'}">
         <div class="add-box"><h3>Textmeddelande</h3><form class="text-slide-form add-text"><input name="title" maxlength="80" placeholder="Rubrik" required /><textarea name="body" maxlength="1200" placeholder="Meddelande" required></textarea><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="15" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Publicera text</button></div>${scheduleFields()}</form></div>
-        <div class="add-box"><h3>Bild, video eller live-data</h3><form class="text-slide-form add-source"><select name="kind"><option value="video">Video (MP4-länk eller fil)</option><option value="image">Bild (URL eller fil)</option><option value="feed">Live-data / JSON-feed (API)</option></select><label class="feed-refresh-setting hidden">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="30" /></label><input name="title" maxlength="80" placeholder="Namn på innehåll" required /><input name="url" type="url" placeholder="https://… eller intern API-adress" /><label class="file-label hidden">Videofil (valfritt) <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime" /></label><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="30" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till</button></div>${scheduleFields()}</form></div>
+        <div class="add-box"><h3>Bild, video eller live-data</h3><form class="text-slide-form add-source"><select name="kind"><option value="video">Video (MP4-länk eller fil)</option><option value="image">Bild (URL eller fil)</option><option value="feed">Live-data / JSON-feed (API)</option></select><label class="feed-refresh-setting hidden">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="30" /></label><label class="feed-integration-setting hidden">Skyddad Pulse-anslutning <select name="integration_id"><option value="">Vanlig JSON-feed</option>${signageIntegrations.map(item => `<option value="${esc(item.id)}">Pulse · ${esc(item.name)}</option>`).join('')}</select></label><input name="title" maxlength="80" placeholder="Namn på innehåll" required /><input name="url" type="url" placeholder="https://… eller intern API-adress" /><label class="file-label hidden">Videofil (valfritt) <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime" /></label><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="30" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till</button></div>${scheduleFields()}</form></div>
         <div class="add-box"><h3>Klocka & datum</h3><form class="text-slide-form add-clock"><input name="title" maxlength="80" placeholder="Rubrik, till exempel Välkommen" /><input name="body" maxlength="180" placeholder="Valfri underrad" /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="20" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till klocka</button></div>${scheduleFields()}</form></div>
         <div class="add-box"><h3>Webbsida eller live-dashboard</h3><form class="text-slide-form add-web"><input name="title" maxlength="80" placeholder="Namn på sidan" required /><input name="url" type="url" placeholder="https://…" required /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="60" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till sida</button></div>${scheduleFields()}</form></div>
       </div>
@@ -1338,11 +1459,14 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   sourceForm.querySelector('[name="kind"]').addEventListener('change', event => {
     const kind = event.target.value;
     sourceForm.querySelector('.feed-refresh-setting').classList.toggle('hidden', kind !== 'feed');
+    sourceForm.querySelector('.feed-integration-setting').classList.toggle('hidden', kind !== 'feed' || signageIntegrations.length === 0);
+    syncFeedIntegrationField(sourceForm);
     const fileInput = sourceForm.querySelector('[name="file"]');
     fileInput.accept = kind === 'image' ? 'image/jpeg,image/png,image/webp' : kind === 'video' ? 'video/mp4,video/webm,video/quicktime' : '';
     sourceForm.querySelector('.file-label').classList.toggle('hidden', !['image', 'video'].includes(kind));
     sourceForm.querySelector('.file-label').firstChild.textContent = kind === 'image' ? 'Bildfil (valfritt) ' : 'Videofil (valfritt) ';
   });
+  sourceForm.querySelector('[name="integration_id"]').addEventListener('change', () => syncFeedIntegrationField(sourceForm));
   sourceForm.querySelector('[name="kind"]').dispatchEvent(new Event('change'));
   sourceForm.addEventListener('submit', event => addSource(event, screen, slides.length));
   card.querySelector('.add-web').addEventListener('submit', event => addWeb(event, screen));
@@ -1450,6 +1574,9 @@ async function addSource(event, screen) {
   const f = new FormData(form);
   const kind = String(f.get('kind'));
   let source_url = String(f.get('url') || '').trim();
+  const integration_id = kind === 'feed' ? String(f.get('integration_id') || '') || null : null;
+  const integration = signageIntegrations.find(item => item.id === integration_id);
+  if (integration) source_url = integration.endpoint_url;
   const file = f.get('file');
   const schedule = scheduleValues(f);
   if (!schedule) return;
@@ -1465,10 +1592,12 @@ async function addSource(event, screen) {
     source_url = supabase.storage.from('signage-assets').getPublicUrl(path).data.publicUrl;
   }
   if (!source_url) return toast('Ange en bild-/videolänk, en feed-URL eller välj en fil.', true);
+  if (integration_id && !integration) return toast('Den valda Pulse-anslutningen finns inte längre. Ladda om sidan.', true);
+  if (kind === 'feed' && !integration_id && /#token=/i.test(source_url)) return toast('Lägg Pulse-token i en skyddad Pulse-anslutning under Integrationer, inte i feed-URL:en.', true);
   if (['image', 'video', 'feed'].includes(kind) && !/^https?:\/\//i.test(source_url)) return toast('Källan ska börja med HTTPS eller HTTP.', true);
   const refresh_interval_seconds = kind === 'feed' ? Number(f.get('refresh_interval_seconds') || 30) : 30;
   if (kind === 'feed' && (!Number.isInteger(refresh_interval_seconds) || refresh_interval_seconds < 10 || refresh_interval_seconds > 3600)) return toast('Uppdateringsintervallet ska vara 10–3600 sekunder.', true);
-  const { error } = await supabase.from('slides').insert({ ...contentOwner(screen), kind, title: String(f.get('title') || '').trim(), source_url, duration_seconds: Number(f.get('duration')) || 30, refresh_interval_seconds, sort_order: await nextOrder(screen), is_active: true, ...schedule });
+  const { error } = await supabase.from('slides').insert({ ...contentOwner(screen), kind, title: String(f.get('title') || '').trim(), source_url, integration_id, duration_seconds: Number(f.get('duration')) || 30, refresh_interval_seconds, sort_order: await nextOrder(screen), is_active: true, ...schedule });
   if (error) return toast(error.message, true);
   form.reset();
   form.querySelector('[name="kind"]').dispatchEvent(new Event('change'));

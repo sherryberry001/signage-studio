@@ -79,6 +79,7 @@ class MainActivity : Activity() {
     private var currentBody = ""
     private var currentKind: String? = null
     private var currentSourceUrl: String? = null
+    private val feedIntegrationCache = mutableMapOf<String, Pair<Long, JSONObject>>()
     private val mediaDir by lazy { File(filesDir, "media").apply { mkdirs() } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -919,8 +920,32 @@ class MainActivity : Activity() {
             var failureStatus = "ok"
             val raw = try {
                 val key = "feed_${sha256(source)}"
-                val displayToken = Uri.parse(source).fragment?.removePrefix("token=")?.takeIf { it.isNotBlank() }
-                val connection = URL(source.substringBefore('#')).openConnection() as HttpURLConnection
+                val integrationId = item.optString("integration_id")
+                    .takeUnless { it.isBlank() || it == "null" }
+                val integrationConfig = integrationId?.let { id ->
+                    feedIntegrationCache[id]?.takeIf { it.first > System.currentTimeMillis() }?.second
+                        ?: runCatching {
+                            val activeScreenId = screenId ?: throw java.io.IOException("Player is not paired")
+                            val response = apiRequest(
+                                "${baseUrl()}/rest/v1/rpc/player_get_integration_config",
+                                "POST",
+                                JSONObject().put("input_screen_id", activeScreenId).put("input_slide_id", item.optString("id")).toString()
+                            )
+                            JSONArray(response).optJSONObject(0)?.also {
+                                feedIntegrationCache[id] = System.currentTimeMillis() + 60_000L to it
+                            }
+                        }.getOrNull()
+                }
+                if (integrationId != null && integrationConfig == null) {
+                    failureStatus = "network_error"
+                    throw java.io.IOException("Feed integration is not configured for this screen")
+                }
+                val endpoint = integrationConfig?.optString("endpoint_url")
+                    ?.takeIf { it.isNotBlank() && it != "null" } ?: source.substringBefore('#')
+                val displayToken = integrationConfig?.optString("display_token")
+                    ?.takeIf { it.isNotBlank() && it != "null" }
+                    ?: Uri.parse(source).fragment?.removePrefix("token=")?.takeIf { it.isNotBlank() }
+                val connection = URL(endpoint).openConnection() as HttpURLConnection
                 val fresh = connection.run {
                     connectTimeout = 8_000; readTimeout = 8_000
                     useCaches = false
@@ -948,6 +973,7 @@ class MainActivity : Activity() {
                 val errorCode = when (failureStatus) {
                     "http_error" -> "http_${httpStatus ?: 0}"
                     "invalid_json" -> "invalid_json"
+                    "network_error" -> if (item.optString("integration_id").isNotBlank() && item.optString("integration_id") != "null") "integration_unavailable" else "network_error"
                     else -> "network_error"
                 }
                 reportFeedStatus(item, failureStatus, httpStatus, errorCode)

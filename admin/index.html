@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261103-integration-health" />
-    <script type="module" src="./app.js?v=20261103-integration-health"></script>
+    <link rel="stylesheet" href="./style.css?v=20261104-secure-integrations" />
+    <script type="module" src="./app.js?v=20261104-secure-integrations"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -76,6 +76,7 @@
             <select name="kind" aria-label="Innehållstyp"><option value="web">Webbsida / dashboard</option><option value="feed">JSON-feed</option><option value="image">Bild</option><option value="video">Video</option><option value="text">Textmeddelande</option><option value="clock">Klocka & datum</option></select>
             <input name="title" maxlength="120" placeholder="Namn på innehållet" required />
             <input name="source_url" type="url" placeholder="Källans HTTPS- eller HTTP-adress" />
+            <label class="feed-integration-setting hidden">Skyddad Pulse-anslutning <select name="integration_id"><option value="">Vanlig JSON-feed</option></select><small>Token hanteras separat och följer med när feeden läggs till i en spellista.</small></label>
             <input name="body" maxlength="1200" placeholder="Textinnehåll (för textmeddelande)" />
             <input name="tags" maxlength="200" placeholder="Taggar, separerade med komma" />
             <label class="feed-refresh-setting hidden">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="30" /></label>
@@ -102,6 +103,9 @@
         </section>
         <section id="integrationPanel" class="activity-panel hidden" data-workspace-panel="integrations">
           <div class="activity-heading"><div><strong>Live-integrationer</strong><span>Status från TV-spelarna för JSON-feeds och Pulse. Frågeparametrar och åtkomsttoken visas aldrig här.</span></div><button id="refreshIntegrations" class="button ghost small" type="button">↻ Uppdatera</button></div>
+          <div class="integration-catalog-heading"><div><strong>Skyddade anslutningar</strong><span>Återanvänd en Pulse-anslutning i flera spellistor. Hemliga token visas aldrig igen efter sparning.</span></div><button id="createIntegration" class="button primary small admin-only" type="button">＋ Ny Pulse-anslutning</button></div>
+          <form id="integrationForm" class="integration-form hidden"><input name="name" maxlength="100" placeholder="Namn, t.ex. Drift-Pulse" required /><input name="endpoint_url" type="url" placeholder="http://server:3001/api/signage" required /><input name="display_token" type="password" autocomplete="new-password" placeholder="Pulse display-token (minst 32 tecken)" /><small>Vid redigering lämnar du tokenfältet tomt för att behålla den sparade tokenen.</small><div><button class="button primary small" type="submit">Spara anslutning</button><button id="cancelIntegration" class="button ghost small" type="button">Avbryt</button></div></form>
+          <div id="integrationCatalogList" class="integration-catalog-list" aria-live="polite"></div>
           <div class="activity-tools"><input id="integrationSearch" type="search" placeholder="Sök feed, skärm eller värdnamn…" aria-label="Sök integrationer" /><select id="integrationFilter" aria-label="Filtrera integrationsstatus"><option value="all">Alla statusar</option><option value="ok">Fungerar</option><option value="error">Har fel</option></select></div>
           <div id="integrationSummary" class="playback-summary"></div>
           <div id="integrationList" class="integration-list" aria-live="polite"></div>
