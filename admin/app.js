@@ -1653,7 +1653,50 @@ function renderTeamMembers() {
   if (!list) return;
   if (currentRole !== 'admin') { list.replaceChildren(); return; }
   const labels = { admin: 'Admin', editor: 'Redaktör · alla skärmar', viewer: 'Läsbehörig · alla skärmar', group_member: 'Gruppmedlem · begränsad gruppåtkomst' };
-  list.innerHTML = teamMembers.map(member => `<div class="team-member" data-user-id="${esc(member.user_id)}"><div class="team-member-identity"><strong>${esc(member.email)}</strong><span>${labels[member.role] || esc(member.role)}</span></div><select class="member-role" aria-label="Roll för ${esc(member.email)}"><option value="editor" ${member.role === 'editor' ? 'selected' : ''}>Redaktör · alla skärmar</option><option value="viewer" ${member.role === 'viewer' ? 'selected' : ''}>Läsbehörig · alla skärmar</option><option value="group_member" ${member.role === 'group_member' ? 'selected' : ''}>Gruppmedlem · valda grupper</option><option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option></select><button class="button ghost small save-member">Spara</button><button class="button ghost small remove-member">Ta bort</button></div>`).join('') || '<p class="team-empty">Inga teammedlemmar ännu.</p>';
+  list.innerHTML = teamMembers.map(member => `<div class="team-member" data-user-id="${esc(member.user_id)}"><div class="team-member-identity"><strong>${esc(member.email)}</strong><span>${labels[member.role] || esc(member.role)}</span></div><select class="member-role" aria-label="Roll för ${esc(member.email)}"><option value="editor" ${member.role === 'editor' ? 'selected' : ''}>Redaktör · alla skärmar</option><option value="viewer" ${member.role === 'viewer' ? 'selected' : ''}>Läsbehörig · alla skärmar</option><option value="group_member" ${member.role === 'group_member' ? 'selected' : ''}>Gruppmedlem · valda grupper</option><option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option></select><button class="button ghost small save-member">Spara</button><button class="button ghost small send-team-link" type="button">Skicka inloggningslänk</button><button class="button ghost small remove-member">Ta bort</button></div>`).join('') || '<p class="team-empty">Inga teammedlemmar ännu.</p>';
+  list.querySelectorAll('.send-team-link').forEach(button => button.addEventListener('click', async () => {
+    if (button.disabled) return;
+    const row = button.closest('.team-member');
+    const member = teamMembers.find(item => item.user_id === row?.dataset.userId);
+    if (!member?.email) return toast('Medlemmen saknar e-postadress.', true);
+    button.disabled = true;
+    button.textContent = 'Skickar …';
+    let cooldownMs = 60_000;
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email: member.email,
+        options: { emailRedirectTo: location.href, shouldCreateUser: false }
+      });
+      if (error) {
+        const code = String(error.code || '').toLowerCase();
+        const message = String(error.message || '').toLowerCase();
+        if (error.status === 429 || code.includes('rate_limit') || message.includes('rate limit') || message.includes('too many requests')) {
+          cooldownMs = 60 * 60_000;
+        }
+        return toast(authRequestMessage(error), true);
+      }
+      toast(`Inloggningslänk skickad till ${member.email}.`);
+    } catch {
+      toast('Kunde inte nå inloggningstjänsten just nu. Försök igen senare.', true);
+    } finally {
+      const retryAt = Date.now() + cooldownMs;
+      const updateCooldown = () => {
+        if (!button.isConnected) return;
+        const secondsLeft = Math.ceil((retryAt - Date.now()) / 1000);
+        if (secondsLeft <= 0) {
+          button.disabled = false;
+          button.textContent = 'Skicka inloggningslänk';
+          button.title = '';
+          return;
+        }
+        button.disabled = true;
+        button.textContent = secondsLeft > 90 ? `Vänta ${Math.ceil(secondsLeft / 60)} min` : `Vänta ${secondsLeft} s`;
+        button.title = 'Supabase tillåter inte upprepade mejl till samma mottagare direkt efter varandra.';
+        setTimeout(updateCooldown, secondsLeft > 90 ? 60_000 : 1000);
+      };
+      updateCooldown();
+    }
+  }));
   list.querySelectorAll('.save-member').forEach(button => button.addEventListener('click', async () => {
     const row = button.closest('.team-member');
     const member = teamMembers.find(item => item.user_id === row.dataset.userId);
