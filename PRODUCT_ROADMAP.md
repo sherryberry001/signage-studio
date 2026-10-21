@@ -13,7 +13,7 @@ Signage Studio should cover the core jobs handled by mature digital-signage plat
 
 | Area | Current coverage | Next product milestone |
 | --- | --- | --- |
-| Screens and devices | Pairing, groups, online status, previews, bulk actions, remote restart/sync, device diagnostics, scheduled online/offline history, and downloadable support bundles | Add actionable alerts and guided remote troubleshooting |
+| Screens and devices | Pairing, groups, online status, previews, bulk actions, remote restart/sync, device diagnostics, scheduled online/offline history, and downloadable support bundles | Add guided remote troubleshooting and configurable alert thresholds |
 | Content | Text, image, video, web links, JSON feeds, reusable library | Robust upload pipeline, expiry/approval, reusable native app instances |
 | Playlists and channels | Reusable playlists with atomic drag or keyboard ordering, recurring schedules, priority, multi-zone, weekly per-screen channel calendar | Preview before publish, playlist-level calendar entries |
 | Live data and apps | Native Pulse/JSON feed and web dashboard support; reusable Pulse connections with protected credentials; per-screen feed status, HTTP/network errors, last success and source host | Expand connector catalog with OAuth-backed business apps, refreshable credentials, and setup health checks |
@@ -25,7 +25,7 @@ Signage Studio should cover the core jobs handled by mature digital-signage plat
 
 ## Delivery order
 
-1. Stabilize the player-to-admin operations loop: confirmed heartbeats, live previews, duplicate-screen cleanup, clear online/offline states.
+1. Stabilize the player-to-admin operations loop: confirmed heartbeats, live previews, duplicate-screen cleanup, clear online/offline states, and actionable operational alerts.
 2. Make content publishing dependable: library lifecycle, preview, schedule visibility, and predictable caching/offline behavior.
 3. Add operational reporting: playback proof, screen health history, alerts, and exports.
 4. Expand live integrations through a documented connector model; keep secrets in protected storage and show failures clearly.

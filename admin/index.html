@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261108-channel-conflicts" />
-    <script type="module" src="./app.js?v=20261108-channel-conflicts"></script>
+    <link rel="stylesheet" href="./style.css?v=20261109-operational-alerts" />
+    <script type="module" src="./app.js?v=20261109-operational-alerts"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -58,6 +58,7 @@
           <form id="createScreenForm" class="create-screen-form"><input id="screenName" maxlength="48" placeholder="Namn på skärmen" required /><select id="newScreenGroup" aria-label="Grupp för ny skärm"><option value="">Ingen grupp</option></select><button class="button primary" type="submit">＋ Ny skärm</button></form>
         </div>
         <div class="screen-tools" data-workspace-panel="screens"><input id="screenSearch" type="search" placeholder="Sök skärmar…" aria-label="Sök skärmar" /><select id="screenFilter" aria-label="Filtrera skärmar"><option value="all">Alla statusar</option><option value="online">Online</option><option value="offline">Offline</option><option value="pairing">Väntar på parkoppling</option></select><select id="groupFilter" aria-label="Filtrera skärmgrupp"><option value="all">Alla grupper</option><option value="ungrouped">Ingen grupp</option></select><span id="visibleScreenCount">0 visade</span><button id="selectVisibleScreens" class="button ghost small hidden" type="button">Välj synliga</button></div>
+        <section id="operationalAlerts" class="operational-alerts" data-workspace-panel="screens" aria-live="polite"></section>
         <section class="screen-groups-panel" data-workspace-panel="screens"><div class="screen-groups-heading"><div><strong>Skärmgrupper</strong><span>Samla skärmar per plats eller team. Gruppfilter fungerar ihop med status och sökning.</span></div><form id="createScreenGroupForm" class="create-screen-group-form"><input name="name" maxlength="64" placeholder="Ny grupp, t.ex. Stockholm" required /><input name="description" maxlength="160" placeholder="Beskrivning (valfritt)" /><button class="button ghost small" type="submit">＋ Skapa grupp</button></form></div><div id="screenGroupList" class="screen-group-list"></div></section>
         <div id="bulkScreenActions" class="bulk-screen-actions hidden" data-workspace-panel="screens"><strong id="selectedScreenCount">0 valda</strong><span>Kommandon skickas bara till aktiva skärmar.</span><label class="bulk-group-assignment admin-only">Flytta till<select id="bulkScreenGroup"><option value="__skip__">Välj grupp</option><option value="">Ingen grupp</option></select></label><button id="assignSelectedGroup" class="button ghost small admin-only" type="button">Flytta valda</button><button class="button ghost small" type="button" data-bulk-command="sync_now">Synka valda</button><button class="button ghost small" type="button" data-bulk-command="restart_player">Starta om valda</button><button id="clearScreenSelection" class="button ghost small" type="button">Rensa val</button></div>
         <div class="playlist-library-bar" data-workspace-panel="content">

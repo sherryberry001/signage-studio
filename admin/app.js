@@ -25,6 +25,7 @@ let integrationStatuses = [];
 let signageIntegrations = [];
 let currentRole = null;
 let statusTimer = null;
+let alertTimer = null;
 let activityTimer = null;
 let integrationTimer = null;
 let channelCalendarOffset = 0;
@@ -125,6 +126,9 @@ function setSession(user) {
     if (!sameUser || !currentRole) loadScreens();
     clearInterval(statusTimer);
     statusTimer = setInterval(refreshScreenStatus, 5000);
+    clearInterval(alertTimer);
+    refreshOperationalAlerts();
+    alertTimer = setInterval(refreshOperationalAlerts, 60000);
   } else {
     screensLoadId++;
     screens = [];
@@ -137,6 +141,7 @@ function setSession(user) {
     channelSchedules = [];
     teamMembers = [];
     screenCommands = [];
+    integrationStatuses = [];
     mediaLibrary = [];
     activityLog = [];
     selectedScreenIds.clear();
@@ -145,6 +150,7 @@ function setSession(user) {
     setWorkspace('screens');
     screenList.replaceChildren();
     clearInterval(statusTimer);
+    clearInterval(alertTimer);
     clearInterval(activityTimer);
     activityTimer = null;
     clearInterval(integrationTimer);
@@ -573,6 +579,7 @@ async function loadScreens() {
   $('#selectVisibleScreens').classList.toggle('hidden', !['admin', 'editor'].includes(currentRole));
   applyScreenFilters();
   updateBulkScreenActions();
+  refreshOperationalAlerts();
   updateScreenSummary();
   renderTeamMembers();
 }
@@ -1227,9 +1234,96 @@ function isOnline(screen) {
   return Boolean(screen.last_seen_at && Date.now() - new Date(screen.last_seen_at).getTime() < 45_000);
 }
 
+function formatAlertAge(value) {
+  if (!value) return 'aldrig ansluten';
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60000));
+  if (minutes < 1) return 'nyss';
+  if (minutes < 60) return `${minutes} min sedan`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} tim sedan`;
+  return `${Math.floor(hours / 24)} dagar sedan`;
+}
+
+function collectOperationalAlerts() {
+  const now = Date.now();
+  const alerts = [];
+  const latestCommands = new Map();
+  screenCommands.forEach(command => {
+    if (!latestCommands.has(command.screen_id)) latestCommands.set(command.screen_id, command);
+  });
+  screens.filter(screen => screen.is_active).forEach(screen => {
+    if (!isOnline(screen)) {
+      alerts.push({
+        kind: 'screen', severity: 0, screen,
+        title: screen.last_seen_at ? 'Skärmen är offline' : 'Skärmen har aldrig anslutit',
+        detail: screen.last_seen_at ? `Senaste kontakt ${formatAlertAge(screen.last_seen_at)}` : 'Kontrollera parkoppling och att TV-spelaren är igång.'
+      });
+    }
+    const command = latestCommands.get(screen.id);
+    const commandTime = new Date(command?.completed_at || command?.created_at || 0).getTime();
+    if (command && command.status === 'failed' && now - commandTime < 86400000) {
+      alerts.push({ kind: 'screen', severity: 1, screen, title: 'Fjärråtgärd misslyckades', detail: `${command.command === 'restart_player' ? 'Omstart' : 'Synk'} · ${command.error_message || 'spelaren rapporterade ett fel'}` });
+    } else if (command && ['pending', 'running'].includes(command.status) && isOnline(screen) && now - new Date(command.created_at).getTime() > 120000) {
+      alerts.push({ kind: 'screen', severity: 1, screen, title: 'Fjärråtgärden väntar', detail: `${command.command === 'restart_player' ? 'Omstart' : 'Synk'} har inte kvitterats på över två minuter.` });
+    }
+  });
+  const recentFeedErrors = integrationStatuses.filter(item => item.status !== 'ok'
+    && item.last_attempt_at && now - new Date(item.last_attempt_at).getTime() < 900000);
+  recentFeedErrors.forEach(feed => {
+    const screen = screens.find(item => item.id === feed.screen_id);
+    if (!screen?.is_active) return;
+    const reason = feed.status === 'http_error' ? `HTTP-fel${feed.last_http_status ? ` ${feed.last_http_status}` : ''}`
+      : feed.status === 'invalid_json' ? 'Svaret är inte giltig JSON' : 'Nätverksfel vid hämtning';
+    alerts.push({ kind: 'feed', severity: 2, screen, title: 'Live-data har fel', detail: `${feed.feed_title} · ${reason}` });
+  });
+  return alerts.sort((a, b) => a.severity - b.severity || String(a.screen.name).localeCompare(String(b.screen.name), 'sv-SE'));
+}
+
+function renderOperationalAlerts() {
+  const container = $('#operationalAlerts');
+  if (!container) return;
+  const alerts = collectOperationalAlerts();
+  const contents = alerts.length
+    ? `<div class="operational-alert-heading"><div><strong>Driftvarningar</strong><span>${alerts.length} kräver uppmärksamhet · uppdateras löpande</span></div><span class="operational-alert-count">${alerts.length}</span></div><div class="operational-alert-list">${alerts.map(alert => `<button class="operational-alert severity-${alert.severity}" type="button" data-alert-kind="${alert.kind}" data-alert-screen="${esc(alert.screen.id)}"><span class="operational-alert-mark">${alert.kind === 'feed' ? '↗' : alert.severity === 0 ? '!' : '↻'}</span><span class="operational-alert-copy"><strong>${esc(alert.screen.name || 'Skärm')} · ${esc(alert.title)}</strong><small>${esc(alert.detail)}</small></span><span class="operational-alert-action">${alert.kind === 'feed' ? 'Visa feed' : 'Öppna skärm'} →</span></button>`).join('')}</div>`
+    : `<div class="operational-alert-heading healthy"><div><strong>Inga aktiva driftvarningar</strong><span>Skärmar, fjärråtgärder och nylig live-data ser bra ut.</span></div><span class="operational-alert-count">✓</span></div>`;
+  if (container.innerHTML !== contents) container.innerHTML = contents;
+}
+
+async function refreshOperationalAlerts() {
+  if (!currentUser) return;
+  const userId = currentUser.id;
+  const { data, error } = await supabase.from('screen_feed_status')
+    .select('screen_id,slide_id,screen_name,feed_title,source_host,status,last_attempt_at,last_success_at,last_http_status,last_error_code')
+    .order('last_attempt_at', { ascending: false }).limit(300);
+  if (!error && currentUser?.id === userId) integrationStatuses = data || [];
+  renderOperationalAlerts();
+}
+
+$('#operationalAlerts').addEventListener('click', event => {
+  const button = event.target.closest('[data-alert-screen]');
+  if (!button) return;
+  const screenId = button.dataset.alertScreen;
+  if (button.dataset.alertKind === 'feed') {
+    const screen = screens.find(item => item.id === screenId);
+    setWorkspace('integrations');
+    $('#integrationSearch').value = screen?.name || '';
+    renderIntegrationStatus();
+    return;
+  }
+  setWorkspace('screens');
+  const card = screenList.querySelector(`[data-screen-id="${CSS.escape(screenId)}"]`);
+  if (!card) return;
+  const group = card.closest('.duplicate-screen-group');
+  if (group) group.open = true;
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  card.classList.add('alert-focus');
+  setTimeout(() => card.classList.remove('alert-focus'), 1800);
+});
+
 function updateScreenSummary() {
   const online = screens.filter(isOnline).length;
   $('#screenCount').textContent = `${screens.length} ${screens.length === 1 ? 'skärm' : 'skärmar'} · ${online} online`;
+  renderOperationalAlerts();
 }
 
 $('#screenSearch').addEventListener('input', applyScreenFilters);
