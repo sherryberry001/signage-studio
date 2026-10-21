@@ -131,6 +131,7 @@ let draftPreviewItems = [];
 let draftPreviewIndex = 0;
 let draftPreviewGeneration = 0;
 let draftPreviewAbortController = null;
+let draftPreviewRefreshTimer = null;
 const authView = $('#authView');
 const appView = $('#appView');
 const screenList = $('#screenList');
@@ -2007,6 +2008,8 @@ function renderDraftPreviewItem() {
   const previous = $('[data-preview-prev]');
   const next = $('[data-preview-next]');
   const refresh = $('[data-preview-refresh]');
+  clearInterval(draftPreviewRefreshTimer);
+  draftPreviewRefreshTimer = null;
   draftPreviewAbortController?.abort();
   draftPreviewAbortController = null;
   const generation = ++draftPreviewGeneration;
@@ -2072,8 +2075,13 @@ function renderDraftPreviewItem() {
     }
   } else if (item.kind === 'feed') {
     addPreviewMessage(frame, 'Hämtar aktuella data från feeden…');
-    draftPreviewAbortController = new AbortController();
-    loadDraftFeedPreview(item, frame, generation, draftPreviewAbortController.signal);
+    startDraftFeedPreview(item, frame, generation);
+    const intervalSeconds = Math.max(10, Math.min(3600, Number(item.refresh_interval_seconds) || 30));
+    draftPreviewRefreshTimer = setInterval(() => {
+      if (generation === draftPreviewGeneration && $('#draftPreviewDialog').open) {
+        startDraftFeedPreview(item, frame, generation);
+      }
+    }, intervalSeconds * 1000);
   } else {
     const content = document.createElement('div');
     content.className = 'draft-preview-copy';
@@ -2112,9 +2120,27 @@ function addPreviewMessage(frame, message, error = false) {
   const status = document.createElement('div');
   status.className = `draft-preview-live-status${error ? ' error' : ''}`;
   status.dataset.previewLiveStatus = '';
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
   status.textContent = message;
   frame.append(status);
   return status;
+}
+
+function startDraftFeedPreview(item, frame, generation) {
+  if (draftPreviewAbortController) return;
+  const controller = new AbortController();
+  draftPreviewAbortController = controller;
+  loadDraftFeedPreview(item, frame, generation, controller.signal)
+    .catch(error => {
+      if (generation !== draftPreviewGeneration) return;
+      const status = frame.querySelector('[data-preview-live-status]') || addPreviewMessage(frame, '');
+      status.classList.add('error');
+      status.textContent = error?.message || 'Kunde inte hämta live-data.';
+    })
+    .finally(() => {
+      if (draftPreviewAbortController === controller) draftPreviewAbortController = null;
+    });
 }
 
 async function loadDraftFeedPreview(item, frame, generation, signal) {
@@ -2181,6 +2207,7 @@ function renderLiveFeedPreview(item, payload, fetchedAt, frame) {
     return;
   }
   frame.querySelector('[data-preview-live-status]')?.remove();
+  frame.querySelector('.draft-preview-dashboard')?.remove();
   const dashboard = document.createElement('div');
   dashboard.className = 'draft-preview-dashboard';
   const header = document.createElement('header');
@@ -2267,7 +2294,10 @@ $('[data-preview-next]').addEventListener('click', () => { draftPreviewIndex = M
 $('[data-preview-refresh]').addEventListener('click', renderDraftPreviewItem);
 $('#draftPreviewDialog').addEventListener('close', () => {
   draftPreviewGeneration++;
+  clearInterval(draftPreviewRefreshTimer);
+  draftPreviewRefreshTimer = null;
   draftPreviewAbortController?.abort();
+  draftPreviewAbortController = null;
   $('[data-preview-stage]').replaceChildren();
 });
 
