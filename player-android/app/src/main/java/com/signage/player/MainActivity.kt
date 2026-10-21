@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.PixelCopy
@@ -38,6 +39,7 @@ import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneId
+import java.util.UUID
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
 
@@ -93,7 +95,10 @@ class MainActivity : Activity() {
         screenConfig = runCatching { JSONObject(prefs.getString("screen_config", "{}") ?: "{}") }.getOrDefault(JSONObject())
         outsideOperatingHours = !isWithinOperatingHours(screenConfig)
         screenPaused = !screenConfig.optBoolean("is_active", true)
-        if (screenId.isNullOrBlank()) showPairing() else startPlayer()
+        if (screenId.isNullOrBlank()) showPairing() else {
+            startPlayer()
+            bindDeviceIdentity()
+        }
     }
 
     private fun enterImmersive() {
@@ -149,7 +154,7 @@ class MainActivity : Activity() {
         if (code.length != 6) return showPairing("Koden ska innehålla sex tecken.")
         worker.execute {
             try {
-                val json = JSONObject().put("input_code", code).toString()
+                val json = JSONObject().put("input_code", code).put("input_device_identity", deviceIdentity()).toString()
                 val response = apiRequest("${baseUrl()}/rest/v1/rpc/activate_screen", "POST", json)
                 val id = response.trim().removeSurrounding("\"")
                 if (id.isBlank() || id == "null") throw IllegalArgumentException("Koden hittades inte eller har redan använts.")
@@ -158,6 +163,38 @@ class MainActivity : Activity() {
                 handler.post { startPlayer() }
             } catch (error: Exception) {
                 handler.post { showPairing(error.message ?: "Kunde inte aktivera skärmen.") }
+            }
+        }
+    }
+
+    private fun deviceIdentity(): String {
+        val androidId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+            ?.takeIf { it.isNotBlank() && it != "9774d56d682e549c" }
+        val identity = androidId?.let { "device:${sha256("signage-studio:$packageName:$it")}" }
+            ?: prefs.getString("device_identity", null)
+            ?: "device:${sha256("signage-studio-install:${UUID.randomUUID()}")}".also {
+                prefs.edit().putString("device_identity", it).apply()
+            }
+        prefs.edit().putString("device_identity", identity).apply()
+        return identity
+    }
+
+    private fun bindDeviceIdentity() {
+        val pairedScreenId = screenId ?: return
+        worker.execute {
+            try {
+                val payload = JSONObject()
+                    .put("input_screen_id", pairedScreenId)
+                    .put("input_device_identity", deviceIdentity())
+                val response = apiRequest("${baseUrl()}/rest/v1/rpc/player_bind_device_identity", "POST", payload.toString())
+                val canonicalId = response.trim().removeSurrounding("\"")
+                if (canonicalId.isNotBlank() && canonicalId != "null" && canonicalId != pairedScreenId) {
+                    prefs.edit().putString("screen_id", canonicalId).apply()
+                    screenId = canonicalId
+                    syncPlaylist()
+                }
+            } catch (_: Exception) {
+                // Existing player sessions remain usable if identity registration is temporarily unavailable.
             }
         }
     }

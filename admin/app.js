@@ -212,7 +212,13 @@ $('#createScreenForm').addEventListener('submit', async event => {
   try {
     const group_id = $('#newScreenGroup').value || null;
     const { error } = await supabase.from('screens').insert({ name, pair_code, group_id, is_active: true });
-    if (error) return toast(error.message, true);
+    if (error) {
+      if (error.code === '23505' && `${error.message} ${error.details || ''}`.includes('screens_name_ci_active_idx')) {
+        await loadScreens();
+        return toast(`En aktiv skärm med namnet “${name}” skapades samtidigt. Den befintliga profilen har inte ändrats.`, true);
+      }
+      return toast(error.message, true);
+    }
     $('#screenName').value = '';
     toast('Skärmen skapades. Ange parkopplingskoden i TV-appen.');
     await loadScreens();
