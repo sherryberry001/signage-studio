@@ -148,6 +148,8 @@ let teamMembers = [];
 let screenCommands = [];
 let screenPublications = [];
 let mediaLibrary = [];
+let mediaFolders = [];
+let mediaLibraryVersions = [];
 let activityLog = [];
 let playbackEvents = [];
 let integrationStatuses = [];
@@ -283,6 +285,8 @@ function setSession(user) {
     screenPublications = [];
     integrationStatuses = [];
     mediaLibrary = [];
+    mediaFolders = [];
+    mediaLibraryVersions = [];
     activityLog = [];
     selectedScreenIds.clear();
     currentRole = null;
@@ -566,6 +570,7 @@ $('#channelManagementList').addEventListener('click', async event => {
 });
 
 $('#mediaSearch').addEventListener('input', renderMediaLibrary);
+$('#mediaFolderFilter').addEventListener('change', renderMediaLibrary);
 $('#activitySearch').addEventListener('input', renderActivityLog);
 $('#activityFilter').addEventListener('change', renderActivityLog);
 $('#refreshActivity').addEventListener('click', loadActivityLog);
@@ -661,12 +666,49 @@ $('#mediaLibraryForm').addEventListener('submit', async event => {
   const tags = [...new Set(String(values.get('tags') || '').split(',').map(tag => tag.trim().toLocaleLowerCase('sv-SE')).filter(Boolean))];
   const refresh_interval_seconds = kind === 'feed' ? Number(values.get('refresh_interval_seconds') || 30) : 30;
   if (kind === 'feed' && (!Number.isInteger(refresh_interval_seconds) || refresh_interval_seconds < 10 || refresh_interval_seconds > 3600)) return toast('Uppdateringsintervallet ska vara 10–3600 sekunder.', true);
-  const { error } = await supabase.from('media_library').insert({ kind, title: String(values.get('title') || '').trim(), body, source_url: source_url || null, integration_id, tags, expires_at, refresh_interval_seconds });
+  const { error } = await supabase.from('media_library').insert({ kind, title: String(values.get('title') || '').trim(), body, source_url: source_url || null, integration_id, tags, folder_id: String(values.get('folder_id') || '') || null, expires_at, refresh_interval_seconds });
   if (error) return toast(error.message, true);
   uploadedFile?.finalize();
   form.reset();
   $('#mediaLibraryForm [name="kind"]').dispatchEvent(new Event('change'));
   toast('Innehållet sparades i biblioteket.');
+  await loadScreens();
+});
+
+$('#createMediaFolderForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!['admin','editor'].includes(currentRole)) return;
+  const form = event.currentTarget;
+  const name = String(new FormData(form).get('name') || '').trim();
+  if (!name) return;
+  const { error } = await supabase.from('media_folders').insert({ name, created_by: currentUser.id });
+  if (error) return toast(error.message, true);
+  form.reset();
+  toast(`Mappen ”${name}” skapades.`);
+  await loadScreens();
+});
+
+$('#renameMediaFolder').addEventListener('click', async () => {
+  if (!['admin','editor'].includes(currentRole)) return;
+  const folder = mediaFolders.find(item => item.id === $('#mediaFolderFilter').value);
+  if (!folder) return;
+  const name = prompt('Nytt mappnamn:', folder.name)?.trim();
+  if (!name || name === folder.name) return;
+  const { error } = await supabase.from('media_folders').update({ name, updated_at: new Date().toISOString() }).eq('id', folder.id);
+  if (error) return toast(error.message, true);
+  toast('Mappen döptes om.');
+  await loadScreens();
+});
+
+$('#deleteMediaFolder').addEventListener('click', async () => {
+  if (!['admin','editor'].includes(currentRole)) return;
+  const folder = mediaFolders.find(item => item.id === $('#mediaFolderFilter').value);
+  if (!folder) return;
+  const count = mediaLibrary.filter(item => item.folder_id === folder.id).length;
+  if (!confirm(`Ta bort mappen ”${folder.name}”? ${count} biblioteksposter flyttas till ”Utan mapp”.`)) return;
+  const { error } = await supabase.from('media_folders').delete().eq('id', folder.id);
+  if (error) return toast(error.message, true);
+  toast('Mappen togs bort. Biblioteksposterna finns kvar utan mapp.');
   await loadScreens();
 });
 
@@ -685,6 +727,8 @@ async function loadScreens() {
     { data: publicationData, error: publicationError },
     { data: approvalData, error: approvalError },
     { data: mediaData, error: mediaError },
+    { data: mediaFolderData, error: mediaFolderError },
+    { data: mediaVersionData, error: mediaVersionError },
     { data: groupData, error: groupError },
     { data: groupMemberData, error: groupMemberError },
     { data: locationData, error: locationError },
@@ -700,6 +744,8 @@ async function loadScreens() {
     supabase.from('screen_publications').select('screen_id,revision,published_at').order('revision', { ascending: false }),
     supabase.from('screen_publication_requests').select('id,screen_id,status,requested_by,requested_at,reviewed_by,reviewed_at,review_note').order('requested_at', { ascending: false }).limit(200),
     supabase.from('media_library').select('*').order('updated_at', { ascending: false }).limit(300),
+    supabase.from('media_folders').select('id,name').order('name', { ascending: true }),
+    supabase.from('media_library_versions').select('id,asset_id,version,source_url,file_name,created_at').order('version', { ascending: false }).limit(1000),
     supabase.from('screen_groups').select('*').order('name', { ascending: true }),
     supabase.from('screen_group_members').select('id,group_id,user_id,created_at').order('created_at', { ascending: true }),
     supabase.from('locations').select('id,name,description,created_at').order('name', { ascending: true }),
@@ -716,6 +762,8 @@ async function loadScreens() {
   if (publicationError) return toast(publicationError.message, true);
   if (approvalError && approvalError.code !== '42P01') return toast(approvalError.message, true);
   if (mediaError && mediaError.code !== '42P01') return toast(mediaError.message, true);
+  if (mediaFolderError) return toast(mediaFolderError.message, true);
+  if (mediaVersionError) return toast(mediaVersionError.message, true);
   if (groupError) return toast(groupError.message, true);
   if (groupMemberError) return toast(groupMemberError.message, true);
   if (locationError) return toast(locationError.message, true);
@@ -730,6 +778,8 @@ async function loadScreens() {
     screenGroupMembers = [];
     locations = [];
     locationMembers = [];
+    mediaFolders = [];
+    mediaLibraryVersions = [];
     playlists = [];
     screenList.replaceChildren();
     $('#emptyState').classList.add('hidden');
@@ -784,6 +834,8 @@ async function loadScreens() {
     publicationHistory.get(publication.screen_id).push(publication);
   });
   mediaLibrary = mediaData || [];
+  mediaFolders = mediaFolderData || [];
+  mediaLibraryVersions = mediaVersionData || [];
   updateChannelControls();
   updateChannelManagement();
   renderScreenGroups();
@@ -854,6 +906,7 @@ function updateRoleVisibility() {
   $('#createPlaylistForm').closest('.playlist-library-bar').classList.toggle('role-hidden', !editor);
   $('#createScreenGroupForm').classList.toggle('hidden', !admin);
   document.querySelectorAll('.admin-only').forEach(control => control.classList.toggle('hidden', !admin));
+  document.querySelectorAll('.editor-only').forEach(control => control.classList.toggle('hidden', !editor));
   document.querySelectorAll('.workspace-tab').forEach(button => {
     button.classList.toggle('hidden', (button.dataset.workspace === 'team' && !admin)
       || (button.dataset.workspace === 'activity' && !admin)
@@ -1194,11 +1247,34 @@ $('#playlistManagementList').addEventListener('click', async event => {
   await savePlaylistOrder(item.playlist_id, reordered.map(slide => slide.id));
 });
 
+function mediaFolderOptions(selectedId = '') {
+  return `<option value="">Utan mapp</option>${mediaFolders.map(folder => `<option value="${esc(folder.id)}" ${folder.id === selectedId ? 'selected' : ''}>${esc(folder.name)}</option>`).join('')}`;
+}
+
 function renderMediaLibrary() {
   const list = $('#mediaLibraryList');
   if (!list) return;
   const query = ($('#mediaSearch')?.value || '').trim().toLocaleLowerCase('sv-SE');
-  const results = mediaLibrary.filter(item => !query || `${item.title} ${(item.tags || []).join(' ')} ${item.kind}`.toLocaleLowerCase('sv-SE').includes(query));
+  const folderFilter = $('#mediaFolderFilter');
+  const previousFolder = folderFilter.value || 'all';
+  folderFilter.innerHTML = `<option value="all">Alla mappar</option><option value="unfiled">Utan mapp</option>${mediaFolders.map(folder => `<option value="${esc(folder.id)}">${esc(folder.name)}</option>`).join('')}`;
+  folderFilter.value = previousFolder === 'all' || previousFolder === 'unfiled' || mediaFolders.some(folder => folder.id === previousFolder) ? previousFolder : 'all';
+  const newAssetFolder = $('#newMediaFolder');
+  const previousNewFolder = newAssetFolder.value;
+  newAssetFolder.innerHTML = mediaFolderOptions(previousNewFolder);
+  newAssetFolder.value = mediaFolders.some(folder => folder.id === previousNewFolder) ? previousNewFolder
+    : mediaFolders.some(folder => folder.id === folderFilter.value) ? folderFilter.value : '';
+  const selectedFolder = folderFilter.value;
+  const activeFolder = mediaFolders.find(folder => folder.id === selectedFolder);
+  $('#renameMediaFolder').disabled = !activeFolder;
+  $('#deleteMediaFolder').disabled = !activeFolder;
+  const results = mediaLibrary.filter(item => {
+    const folderName = mediaFolders.find(folder => folder.id === item.folder_id)?.name || '';
+    const matchesFolder = selectedFolder === 'all'
+      || (selectedFolder === 'unfiled' && !item.folder_id)
+      || item.folder_id === selectedFolder;
+    return matchesFolder && (!query || `${item.title} ${(item.tags || []).join(' ')} ${item.kind} ${folderName}`.toLocaleLowerCase('sv-SE').includes(query));
+  });
   const options = `<option value="">Välj spellista</option>${playlists.map(playlist => `<option value="${esc(playlist.id)}">${esc(playlist.name)}</option>`).join('')}`;
   list.replaceChildren(...results.map(item => {
     const row = document.createElement('article');
@@ -1207,7 +1283,14 @@ function renderMediaLibrary() {
     const sourceLabel = integration ? `Skyddad Pulse · ${integration.name}` : item.source_url || item.body || '';
     const expired = Boolean(item.expires_at && new Date(item.expires_at).getTime() <= Date.now());
     const expiryLabel = item.expires_at ? `${expired ? 'Utgången' : 'Visas till'} ${new Date(item.expires_at).toLocaleString('sv-SE')}` : 'Ingen utgångstid';
-    row.innerHTML = `<div class="media-library-main"><div class="media-library-detail"><strong>${esc(item.title)}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s${item.kind === 'feed' ? ` · hämtas var ${item.refresh_interval_seconds || 30}s` : ''} · ${esc(expiryLabel)} ${item.tags?.length ? `· ${item.tags.map(tag => `#${esc(tag)}`).join(' ')}` : ''}</span><small>${esc(sourceLabel)}</small></div><details class="media-library-edit" ${['admin','editor'].includes(currentRole) ? '' : 'hidden'}><summary>Redigera</summary><form data-library-edit="${esc(item.id)}"><input name="title" maxlength="120" value="${esc(item.title)}" required aria-label="Namn" /><input name="source_url" type="url" value="${esc(item.source_url || '')}" placeholder="Källans URL" aria-label="Källans URL" /><label class="library-integration-setting ${item.kind === 'feed' ? '' : 'hidden'}">Pulse-anslutning<select name="integration_id" data-selected-integration="${esc(item.integration_id || '')}"><option value="">Vanlig JSON-feed</option></select></label><textarea name="body" maxlength="1200" placeholder="Textinnehåll" aria-label="Textinnehåll">${esc(item.body || '')}</textarea><input name="tags" maxlength="200" value="${esc((item.tags || []).join(', '))}" placeholder="Taggar, separerade med komma" aria-label="Taggar" /><label class="media-expiry-field">Utgångstid (valfritt)<input name="expires_at" type="datetime-local" value="${esc(localDateTimeInput(item.expires_at))}" /><small>Poster slutar visas efter tiden även från TV:ns offlinecache.</small></label>${item.kind === 'feed' ? `<label class="feed-refresh-setting">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="${item.refresh_interval_seconds || 30}" required /></label>` : ''}<button class="button ghost small" type="submit">Spara ändringar</button></form></details></div><div class="media-library-actions"><select aria-label="Välj spellista för ${esc(item.title)}" data-library-playlist>${options}</select><button class="button ghost small" type="button" data-library-add="${esc(item.id)}" ${['admin','editor'].includes(currentRole) && !expired ? '' : 'disabled'}>${expired ? 'Utgången' : 'Lägg till'}</button><button class="icon-button delete" type="button" aria-label="Ta bort ${esc(item.title)}" data-library-delete="${esc(item.id)}" ${currentRole === 'admin' || currentRole === 'editor' ? '' : 'hidden'}>×</button></div>`;
+    const folderName = mediaFolders.find(folder => folder.id === item.folder_id)?.name || 'Utan mapp';
+    const fileVersions = mediaLibraryVersions.filter(version => version.asset_id === item.id);
+    const hasFileHistory = ['image','video'].includes(item.kind) && fileVersions.length > 0;
+    const versionHistory = hasFileHistory
+      ? `<details class="media-file-history"><summary>Filhistorik · ${fileVersions.length} versioner</summary><div class="media-file-version-list">${fileVersions.map(version => `<div class="media-file-version"><span><strong>Version ${esc(version.version)}${version.source_url === item.source_url ? ' · nuvarande fil' : ''}</strong><small>${esc(version.file_name || 'Mediafil')} · ${esc(new Date(version.created_at).toLocaleString('sv-SE'))}</small></span>${version.source_url !== item.source_url && ['admin','editor'].includes(currentRole) ? `<button class="button ghost small" type="button" data-library-version-restore="${esc(version.id)}" data-library-version-asset="${esc(item.id)}">Återställ</button>` : ''}</div>`).join('')}</div></details>`
+      : '';
+    const fileAccept = item.kind === 'image' ? 'image/jpeg,image/png,image/webp' : 'video/mp4,video/webm,video/quicktime';
+    row.innerHTML = `<div class="media-library-main"><div class="media-library-detail"><strong>${esc(item.title)}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s${item.kind === 'feed' ? ` · hämtas var ${item.refresh_interval_seconds || 30}s` : ''} · ${esc(folderName)} · ${esc(expiryLabel)} ${item.tags?.length ? `· ${item.tags.map(tag => `#${esc(tag)}`).join(' ')}` : ''}</span><small>${esc(sourceLabel)}</small></div><details class="media-library-edit" ${['admin','editor'].includes(currentRole) ? '' : 'hidden'}><summary>Redigera</summary><form data-library-edit="${esc(item.id)}"><input name="title" maxlength="120" value="${esc(item.title)}" required aria-label="Namn" /><select name="folder_id" aria-label="Mapp">${mediaFolderOptions(item.folder_id || '')}</select><input name="source_url" type="url" value="${esc(item.source_url || '')}" placeholder="Källans URL" aria-label="Källans URL" /><label class="library-integration-setting ${item.kind === 'feed' ? '' : 'hidden'}">Pulse-anslutning<select name="integration_id" data-selected-integration="${esc(item.integration_id || '')}"><option value="">Vanlig JSON-feed</option></select></label><textarea name="body" maxlength="1200" placeholder="Textinnehåll" aria-label="Textinnehåll">${esc(item.body || '')}</textarea><input name="tags" maxlength="200" value="${esc((item.tags || []).join(', '))}" placeholder="Taggar, separerade med komma" aria-label="Taggar" /><label class="media-expiry-field">Utgångstid (valfritt)<input name="expires_at" type="datetime-local" value="${esc(localDateTimeInput(item.expires_at))}" /><small>Poster slutar visas efter tiden även från TV:ns offlinecache.</small></label>${['image','video'].includes(item.kind) ? `<label class="file-label">Ersätt ${item.kind === 'image' ? 'bild' : 'video'} (valfritt) <input name="file" type="file" accept="${fileAccept}" /></label>` : ''}${item.kind === 'feed' ? `<label class="feed-refresh-setting">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="${item.refresh_interval_seconds || 30}" required /></label>` : ''}${versionHistory}<button class="button ghost small" type="submit">Spara ändringar</button></form></details></div><div class="media-library-actions"><select aria-label="Välj spellista för ${esc(item.title)}" data-library-playlist>${options}</select><button class="button ghost small" type="button" data-library-add="${esc(item.id)}" ${['admin','editor'].includes(currentRole) && !expired ? '' : 'disabled'}>${expired ? 'Utgången' : 'Lägg till'}</button><button class="icon-button delete" type="button" aria-label="Ta bort ${esc(item.title)}" data-library-delete="${esc(item.id)}" ${currentRole === 'admin' || currentRole === 'editor' ? '' : 'hidden'}>×</button></div>`;
     return row;
   }));
   populateFeedIntegrationSelects();
@@ -1220,6 +1303,7 @@ function renderMediaLibrary() {
     event.preventDefault();
     const id = form.dataset.libraryEdit;
     const asset = mediaLibrary.find(item => item.id === id);
+    if (!asset) return;
     const values = new FormData(form);
     const title = String(values.get('title') || '').trim();
     let source_url = String(values.get('source_url') || '').trim();
@@ -1238,9 +1322,37 @@ function renderMediaLibrary() {
     if (asset.kind === 'feed' && (!Number.isInteger(refresh_interval_seconds) || refresh_interval_seconds < 10 || refresh_interval_seconds > 3600)) return toast('Uppdateringsintervallet ska vara 10–3600 sekunder.', true);
     if (integration_id && !integration) return toast('Den valda Pulse-anslutningen finns inte längre. Ladda om sidan.', true);
     if (asset.kind === 'feed' && !integration_id && /#token=/i.test(source_url)) return toast('Lägg Pulse-token i en skyddad Pulse-anslutning under Integrationer, inte i feed-URL:en.', true);
-    const { error } = await supabase.from('media_library').update({ title, source_url: source_url || null, integration_id, body, tags, expires_at, refresh_interval_seconds, updated_at: new Date().toISOString() }).eq('id', id);
+    const folder_id = String(values.get('folder_id') || '') || null;
+    const file = values.get('file');
+    let uploadedFile = null;
+    if (file instanceof File && file.size > 0) {
+      const maxBytes = asset.kind === 'image' ? 30 * 1024 * 1024 : 400 * 1024 * 1024;
+      const allowedTypes = asset.kind === 'image' ? ['image/jpeg', 'image/png', 'image/webp'] : ['video/mp4', 'video/webm', 'video/quicktime'];
+      if (!['image', 'video'].includes(asset.kind)) return toast('Endast bilder och videor kan ersättas med en uppladdad fil.', true);
+      if (file.size > maxBytes) return toast(asset.kind === 'image' ? 'Bildfilen får vara högst 30 MB.' : 'Videofilen får vara högst 400 MB.', true);
+      if (!allowedTypes.includes(file.type)) return toast(asset.kind === 'image' ? 'Bilder ska vara JPEG, PNG eller WebP.' : 'Videor ska vara MP4, WebM eller QuickTime.', true);
+      try {
+        uploadedFile = await uploadSignageFile(file, { form, prefix: `library/${currentUser.id}/${asset.id}` });
+        source_url = uploadedFile.source_url;
+      } catch (error) {
+        return toast(error.message || 'Filen kunde inte laddas upp.', true);
+      }
+    }
+    const { error } = await supabase.from('media_library').update({ title, source_url: source_url || null, integration_id, body, tags, folder_id, expires_at, refresh_interval_seconds, updated_at: new Date().toISOString() }).eq('id', id);
     if (error) return toast(error.message, true);
+    uploadedFile?.finalize();
     toast('Biblioteksposten och dess spellistereferenser uppdaterades.');
+    await loadScreens();
+  }));
+  list.querySelectorAll('[data-library-version-restore]').forEach(button => button.addEventListener('click', async () => {
+    if (!['admin','editor'].includes(currentRole)) return;
+    const version = mediaLibraryVersions.find(item => item.id === button.dataset.libraryVersionRestore);
+    const asset = mediaLibrary.find(item => item.id === button.dataset.libraryVersionAsset);
+    if (!version || !asset || version.asset_id !== asset.id) return toast('Filversionen kunde inte hittas. Ladda om biblioteket.', true);
+    if (!confirm(`Återställ version ${version.version} av ”${asset.title}”? Detta blir den nya aktiva filen och läggs till i versionshistoriken.`)) return;
+    const { error } = await supabase.from('media_library').update({ source_url: version.source_url, updated_at: new Date().toISOString() }).eq('id', asset.id);
+    if (error) return toast(error.message, true);
+    toast(`Version ${version.version} återställdes.`);
     await loadScreens();
   }));
   list.querySelectorAll('[data-library-add]').forEach(button => button.addEventListener('click', async () => {

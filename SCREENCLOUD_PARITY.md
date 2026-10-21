@@ -7,7 +7,7 @@ This document uses ScreenCloud's publicly described product areas as a capabilit
 | Product area | Signage Studio today | Work to reach a mature platform |
 | --- | --- | --- |
 | Screen fleet | Native Android TV player, pairing/recovery, locations and groups, online state, current item, live captures, diagnostics, bulk sync/restart | Stable device identity and duplicate cleanup; configurable health alerts; remote device settings and recovery |
-| Content library | Text, image, video, web, JSON/Pulse feeds, tags, reuse, expiry, upload to Supabase storage | Resumable uploads, processing/transcoding, folders, document/PDF support, replace-file history, preview and content validation |
+| Content library | Text, image, video, web, JSON/Pulse feeds, tags, folders, reuse, expiry, resumable uploads, file replacement and restore history | Processing/transcoding, document/PDF support, content preview and validation |
 | Authoring | Structured text/feed presentation and TV layouts with ticker or side zone | Screen canvas/editor, reusable brand templates, safe-area/layout preview, schedule-aware preview, reusable app configurations |
 | Playlists | Ordered reusable playlists, screen assignment, multi-zone support | Draft state, version history, duplicate/copy workflows, randomized playback, publish acknowledgements |
 | Channels and scheduling | Reusable channels, playlist priority, recurring schedules, calendar, temporary casts, expiry, draft preview, atomic per-screen publish and append-only version restore | Explicit discard, conflict resolution and richer recurrence/availability rules |
@@ -22,7 +22,7 @@ This document uses ScreenCloud's publicly described product areas as a capabilit
 
 1. **Safe publishing:** separate working changes from live content; preview a channel; publish atomically; retain the last published version; restore or discard drafts; show which screens acknowledged the new version.
 2. **Locations and governance:** extend location-scoped read access to granular editing, publishing, and approval permissions while preserving existing group grants.
-3. **Creation and media reliability:** resumable uploads, replacement/version history, native layouts/templates, and a clear preview for the target TV aspect ratio.
+3. **Creation and media reliability:** processing/transcoding, document/PDF support, content validation and preview, native layouts/templates, and a clear preview for the target TV aspect ratio.
 4. **Broadcast and workflow:** approval states, publisher permissions, emergency/temporary announcements, target selection, expiry, and delivery receipts.
 5. **Integrations and APIs:** connector contract, credential lifecycle, health diagnostics, prioritized OAuth integrations, webhooks, and public API documentation.
 6. **Fleet operations and reporting:** device settings where Android permits them, managed kiosk deployment, safe player updates, proof-of-play aggregates, exports, and alert routing.
