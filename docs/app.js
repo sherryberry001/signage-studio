@@ -755,7 +755,7 @@ async function loadScreens() {
     supabase.from('screen_group_members').select('id,group_id,user_id,created_at').order('created_at', { ascending: true }),
     supabase.from('locations').select('id,name,description,created_at').order('name', { ascending: true }),
     supabase.from('location_members').select('id,location_id,user_id,created_at').order('created_at', { ascending: true }),
-    supabase.from('screen_broadcasts').select('id,title,body,starts_at,ends_at,created_at,cancelled_at,screen_broadcast_targets(screen_id,superseded_at)').is('cancelled_at', null).lte('starts_at', new Date().toISOString()).gt('ends_at', new Date().toISOString()).order('created_at', { ascending: false }).limit(50)
+    supabase.from('screen_broadcasts').select('id,title,body,kind,source_url,duration_seconds,starts_at,ends_at,created_at,cancelled_at,screen_broadcast_targets(screen_id,superseded_at)').is('cancelled_at', null).gt('ends_at', new Date().toISOString()).order('starts_at', { ascending: true }).limit(100)
   ]);
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
@@ -844,6 +844,7 @@ async function loadScreens() {
   mediaLibrary = mediaData || [];
   mediaFolders = mediaFolderData || [];
   mediaLibraryVersions = mediaVersionData || [];
+  updateBroadcastAssetOptions();
   updateChannelControls();
   updateChannelManagement();
   renderScreenGroups();
@@ -1808,6 +1809,7 @@ $('#clearScreenSelection').addEventListener('click', () => {
 document.querySelectorAll('[data-bulk-command]').forEach(button => button.addEventListener('click', () => queueBulkPlayerCommand(button.dataset.bulkCommand, button)));
 $('#publishSelectedScreens').addEventListener('click', publishSelectedScreens);
 $('#screenBroadcastForm').addEventListener('submit', sendScreenBroadcast);
+$('#screenBroadcastForm [name="asset_id"]').addEventListener('change', updateBroadcastTextRequirement);
 $('#screenBroadcastList').addEventListener('click', cancelScreenBroadcastFromList);
 $('#assignSelectedGroup').addEventListener('click', assignSelectedScreensToGroup);
 $('#assignSelectedLocation').addEventListener('click', assignSelectedScreensToLocation);
@@ -1962,15 +1964,14 @@ function renderScreenBroadcasts() {
   if (!list) return;
   const now = Date.now();
   const active = screenBroadcasts.filter(item => !item.cancelled_at
-    && new Date(item.starts_at).getTime() <= now
     && new Date(item.ends_at).getTime() > now
-    && (item.screen_broadcast_targets || []).some(target => !target.superseded_at));
+    && (item.screen_broadcast_targets || []).some(target => !target.superseded_at || new Date(target.superseded_at).getTime() > now));
   if (!active.length) {
-    list.innerHTML = '<span class="screen-groups-empty">Inga aktiva tillfälliga utskick.</span>';
+    list.innerHTML = '<span class="screen-groups-empty">Inga planerade eller aktiva tillfälliga utskick.</span>';
     return;
   }
   list.replaceChildren(...active.map(item => {
-    const targetIds = (item.screen_broadcast_targets || []).filter(target => !target.superseded_at).map(target => target.screen_id);
+    const targetIds = (item.screen_broadcast_targets || []).filter(target => !target.superseded_at || new Date(target.superseded_at).getTime() > now).map(target => target.screen_id);
     const targetNames = targetIds.map(id => screens.find(screen => screen.id === id)?.name).filter(Boolean);
     const row = document.createElement('article');
     row.className = 'screen-broadcast-row';
@@ -1978,7 +1979,11 @@ function renderScreenBroadcasts() {
     const title = document.createElement('strong');
     title.textContent = item.title;
     const meta = document.createElement('small');
-    meta.textContent = `${targetNames.length} skärmar · slutar ${new Date(item.ends_at).toLocaleString('sv-SE')}${item.body ? ` · ${item.body}` : ''}`;
+    const startsAt = new Date(item.starts_at);
+    const startsLater = startsAt.getTime() > now;
+    const kind = item.kind === 'image' ? 'Bild' : item.kind === 'video' ? 'Video' : 'Text';
+    const endsAt = new Date(item.ends_at);
+    meta.textContent = `${kind} · ${targetNames.length} skärmar · ${startsLater ? `planerat ${startsAt.toLocaleString('sv-SE')}–${endsAt.toLocaleString('sv-SE')}` : `aktivt till ${endsAt.toLocaleString('sv-SE')}`}${item.body ? ` · ${item.body}` : ''}`;
     detail.append(title, meta);
     row.append(detail);
     if (['admin', 'editor'].includes(currentRole)) {
@@ -1986,11 +1991,36 @@ function renderScreenBroadcasts() {
       cancel.type = 'button';
       cancel.className = 'button ghost small';
       cancel.dataset.broadcastCancel = item.id;
-      cancel.textContent = 'Avbryt';
+      cancel.textContent = startsLater ? 'Avbryt planerat' : 'Avbryt';
       row.append(cancel);
     }
     return row;
   }));
+}
+
+function updateBroadcastAssetOptions() {
+  const select = $('#screenBroadcastForm [name="asset_id"]');
+  if (!select) return;
+  const selected = select.value;
+  const options = mediaLibrary.filter(asset => ['image','video'].includes(asset.kind)
+    && asset.source_url
+    && (!asset.expires_at || new Date(asset.expires_at).getTime() > Date.now()));
+  select.innerHTML = `<option value="">Endast text</option>${options.map(asset => `<option value="${esc(asset.id)}">${asset.kind === 'image' ? 'Bild' : 'Video'} · ${esc(asset.title)}</option>`).join('')}`;
+  if (options.some(asset => asset.id === selected)) select.value = selected;
+  updateBroadcastTextRequirement();
+}
+
+function updateBroadcastTextRequirement() {
+  const form = $('#screenBroadcastForm');
+  if (!form) return;
+  const hasAsset = Boolean(form.elements.asset_id.value);
+  form.elements.body.required = !hasAsset;
+  form.elements.body.placeholder = hasAsset ? 'Valfri textbeskrivning' : 'Meddelande till skärmarna';
+}
+
+function supportsScheduledBroadcasts(playerVersion) {
+  const [major, minor] = String(playerVersion || '').split('.').map(Number);
+  return Number.isFinite(major) && Number.isFinite(minor) && (major > 1 || (major === 1 && minor >= 19));
 }
 
 async function sendScreenBroadcast(event) {
@@ -2003,12 +2033,21 @@ async function sendScreenBroadcast(event) {
   const form = event.currentTarget;
   const title = form.elements.title.value.trim();
   const body = form.elements.body.value.trim();
+  const assetId = form.elements.asset_id.value || null;
   const duration = Number(form.elements.duration.value);
-  if (!title || !body) return toast('Fyll i både rubrik och meddelande.', true);
+  const displayDuration = Number(form.elements.duration_seconds.value);
+  const startAt = form.elements.start_at.value ? new Date(form.elements.start_at.value) : new Date();
+  if (!title || (!body && !assetId)) return toast('Ange en rubrik och ett meddelande eller välj media.', true);
   if (!Number.isInteger(duration) || duration < 1 || duration > 1440) return toast('Välj en giltig visningstid.', true);
+  if (!Number.isInteger(displayDuration) || displayDuration < 5 || displayDuration > 600) return toast('Välj en giltig visningstid för bild/video.', true);
+  if (Number.isNaN(startAt.getTime()) || startAt < new Date(Date.now() - 120_000) || startAt > new Date(Date.now() + 90 * 86400_000)) return toast('Starttiden måste vara nu eller inom 90 dagar.', true);
   const skipped = selected.length - active.length;
   const skippedLabel = skipped ? ` ${skipped} pausade eller opairade skärmar hoppas över.` : '';
-  if (!confirm(`Skicka ”${title}” till ${active.length} aktiva skärmar i ${duration} minuter? Utskicket visas direkt ovanpå deras vanliga innehåll.${skippedLabel}`)) return;
+  const scheduled = startAt.getTime() > Date.now() + 5_000;
+  const oldPlayers = scheduled ? active.filter(screen => !supportsScheduledBroadcasts(screen.player_version)) : [];
+  const startLabel = scheduled ? `Starta ${startAt.toLocaleString('sv-SE')}` : 'Skicka direkt';
+  const compatibilityNote = oldPlayers.length ? ` ${oldPlayers.length} skärmar med äldre spelare behöver vara online vid start.` : '';
+  if (!confirm(`${startLabel}: ${assetId ? 'visa valt media' : 'visa meddelandet'} ”${title}” på ${active.length} aktiva skärmar i ${duration} minuter?${compatibilityNote}${skippedLabel}`)) return;
   const button = form.querySelector('button[type="submit"]');
   button.disabled = true;
   try {
@@ -2016,13 +2055,20 @@ async function sendScreenBroadcast(event) {
       input_screen_ids: active.map(screen => screen.id),
       input_title: title,
       input_body: body,
-      input_duration_minutes: duration
+      input_duration_minutes: duration,
+      input_start_at: startAt.toISOString(),
+      input_asset_id: assetId,
+      input_duration_seconds: displayDuration
     });
     if (error) return toast(error.message, true);
     form.reset();
     form.elements.duration.value = '10';
+    form.elements.duration_seconds.value = '60';
+    updateBroadcastTextRequirement();
     $('#screenBroadcastComposer').open = false;
-    toast(`Meddelandet skickades till ${active.length} skärmar. De återgår automatiskt efter ${duration} minuter.`);
+    toast(scheduled
+      ? `Utskicket är planerat till ${startAt.toLocaleString('sv-SE')} på ${active.length} skärmar.`
+      : `Utskicket startade på ${active.length} skärmar och avslutas automatiskt efter ${duration} minuter.`);
     await loadScreens();
   } finally {
     button.disabled = false;
@@ -2033,14 +2079,18 @@ async function cancelScreenBroadcastFromList(event) {
   const button = event.target.closest('[data-broadcast-cancel]');
   if (!button || !['admin', 'editor'].includes(currentRole)) return;
   const broadcast = screenBroadcasts.find(item => item.id === button.dataset.broadcastCancel);
-  if (!broadcast || !confirm(`Avbryt ”${broadcast.title}” nu? Anslutna skärmar återgår vid nästa synk.`)) return;
+  if (!broadcast) return;
+  const startsLater = new Date(broadcast.starts_at).getTime() > Date.now();
+  if (!confirm(startsLater
+    ? `Avbryt det planerade utskicket ”${broadcast.title}”? Skärmar som redan har laddat ned schemat och är offline kan fortfarande visa det tills de ansluter igen eller den ursprungliga sluttiden nås.`
+    : `Avbryt ”${broadcast.title}” nu? Anslutna skärmar återgår vid nästa synk. Offline-skärmar kan fortsätta visa den cachade versionen tills de ansluter igen eller den ursprungliga sluttiden nås.`)) return;
   button.disabled = true;
   const { data: targetCount, error } = await supabase.rpc('cancel_screen_broadcast', { input_broadcast_id: broadcast.id });
   if (error) {
     button.disabled = false;
     return toast(error.message, true);
   }
-  toast(`Utskicket avbröts. Synk köad för ${targetCount} skärmar.`);
+  toast(`${startsLater ? 'Det planerade utskicket avbröts' : 'Utskicket avbröts'}. Synk köad för ${targetCount} skärmar.`);
   await loadScreens();
 }
 
@@ -2053,7 +2103,7 @@ async function refreshScreenStatus() {
   ] = await Promise.all([
     supabase.from('screens').select('id,last_seen_at,preview_updated_at,current_title,current_body,current_kind,current_source_url,current_slide_id,forced_slide_id,player_version,device_model,android_version,display_size,network_type,device_updated_at,applied_revision,applied_revision_at'),
     supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100),
-    supabase.from('screen_broadcasts').select('id,title,body,starts_at,ends_at,created_at,cancelled_at,screen_broadcast_targets(screen_id,superseded_at)').is('cancelled_at', null).lte('starts_at', new Date().toISOString()).gt('ends_at', new Date().toISOString()).order('created_at', { ascending: false }).limit(50)
+    supabase.from('screen_broadcasts').select('id,title,body,kind,source_url,duration_seconds,starts_at,ends_at,created_at,cancelled_at,screen_broadcast_targets(screen_id,superseded_at)').is('cancelled_at', null).gt('ends_at', new Date().toISOString()).order('starts_at', { ascending: true }).limit(100)
   ]);
   if (error || commandError) return;
   if (!broadcastError) screenBroadcasts = broadcastData || [];

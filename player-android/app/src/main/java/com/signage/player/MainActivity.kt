@@ -934,6 +934,10 @@ class MainActivity : Activity() {
         val now = Instant.now()
         val forced = all.firstOrNull { item ->
             if (!item.optBoolean("forced") || !isNotExpired(item, now)) return@firstOrNull false
+            val forcedFrom = item.optString("forced_from")
+                .takeIf { it.isNotBlank() && it != "null" }
+                ?.let { runCatching { Instant.parse(it) }.getOrNull() }
+            if (forcedFrom != null && now.isBefore(forcedFrom)) return@firstOrNull false
             val forcedUntil = item.optString("forced_until")
                 .takeIf { it.isNotBlank() && it != "null" }
                 ?.let { runCatching { Instant.parse(it) }.getOrNull() }
