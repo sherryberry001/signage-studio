@@ -9,6 +9,7 @@ const screenList = $('#screenList');
 const notice = $('#setupNotice');
 let currentUser = null;
 let screens = [];
+let screenGroups = [];
 let playlists = [];
 let playlistSlides = [];
 let channels = [];
@@ -95,6 +96,7 @@ function setSession(user) {
   } else {
     screensLoadId++;
     screens = [];
+    screenGroups = [];
     playlists = [];
     playlistSlides = [];
     channels = [];
@@ -156,7 +158,8 @@ $('#createScreenForm').addEventListener('submit', async event => {
   const submit = event.currentTarget.querySelector('button[type="submit"]');
   submit.disabled = true;
   try {
-    const { error } = await supabase.from('screens').insert({ name, pair_code, is_active: true });
+    const group_id = $('#newScreenGroup').value || null;
+    const { error } = await supabase.from('screens').insert({ name, pair_code, group_id, is_active: true });
     if (error) return toast(error.message, true);
     $('#screenName').value = '';
     toast('Skärmen skapades. Ange parkopplingskoden i TV-appen.');
@@ -164,6 +167,49 @@ $('#createScreenForm').addEventListener('submit', async event => {
   } finally {
     submit.disabled = false;
   }
+});
+
+$('#createScreenGroupForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (currentRole !== 'admin') return;
+  const form = event.currentTarget;
+  const values = new FormData(form);
+  const name = String(values.get('name') || '').trim();
+  const description = String(values.get('description') || '').trim();
+  if (!name) return toast('Ange ett namn på gruppen.', true);
+  const { error } = await supabase.from('screen_groups').insert({ name, description });
+  if (error) return toast(error.message, true);
+  form.reset();
+  toast(`Gruppen ”${name}” skapades.`);
+  await loadScreens();
+});
+
+$('#screenGroupList').addEventListener('submit', async event => {
+  const form = event.target.closest('[data-screen-group-edit]');
+  if (!form) return;
+  event.preventDefault();
+  const values = new FormData(form);
+  const name = String(values.get('name') || '').trim();
+  const description = String(values.get('description') || '').trim();
+  if (!name) return toast('Gruppnamnet får inte vara tomt.', true);
+  const { error } = await supabase.from('screen_groups').update({ name, description, updated_at: new Date().toISOString() }).eq('id', form.dataset.screenGroupEdit);
+  if (error) return toast(error.message, true);
+  toast('Skärmgruppen uppdaterades.');
+  await loadScreens();
+});
+
+$('#screenGroupList').addEventListener('click', async event => {
+  const button = event.target.closest('[data-screen-group-delete]');
+  if (!button || currentRole !== 'admin') return;
+  const group = screenGroups.find(item => item.id === button.dataset.screenGroupDelete);
+  if (!group) return;
+  const count = screens.filter(screen => screen.group_id === group.id).length;
+  const effect = count ? ` ${count} skärmar flyttas till ”Ingen grupp”; innehåll och parkopplingar behålls.` : '';
+  if (!confirm(`Ta bort gruppen ”${group.name}”?${effect}`)) return;
+  const { error } = await supabase.from('screen_groups').delete().eq('id', group.id);
+  if (error) return toast(error.message, true);
+  toast('Skärmgruppen togs bort.');
+  await loadScreens();
 });
 
 $('#teamRoleForm').addEventListener('submit', async event => {
@@ -269,7 +315,8 @@ async function loadScreens() {
     { data: channelPlaylistData, error: channelPlaylistError },
     { data: channelScheduleData, error: channelScheduleError },
     { data: commandData, error: commandError },
-    { data: mediaData, error: mediaError }
+    { data: mediaData, error: mediaError },
+    { data: groupData, error: groupError }
   ] = await Promise.all([
     supabase.from('screens').select('*').order('created_at', { ascending: false }),
     supabase.from('playlists').select('*').order('name', { ascending: true }),
@@ -278,7 +325,8 @@ async function loadScreens() {
     supabase.from('channel_playlists').select('*').order('channel_id').order('sort_order'),
     supabase.from('screen_channel_schedules').select('*').order('priority', { ascending: true }),
     supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100),
-    supabase.from('media_library').select('*').order('updated_at', { ascending: false }).limit(300)
+    supabase.from('media_library').select('*').order('updated_at', { ascending: false }).limit(300),
+    supabase.from('screen_groups').select('*').order('name', { ascending: true })
   ]);
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
@@ -289,12 +337,14 @@ async function loadScreens() {
   if (channelScheduleError) return toast(channelScheduleError.message, true);
   if (commandError) return toast(commandError.message, true);
   if (mediaError && mediaError.code !== '42P01') return toast(mediaError.message, true);
+  if (groupError) return toast(groupError.message, true);
   teamMembers = memberData || [];
   currentRole = teamMembers.find(member => member.user_id === userId)?.role || null;
   updateRoleVisibility();
   if (!currentRole) {
     showNotice('Det här kontot saknar en teamroll. Be en administratör att tilldela åtkomst.');
     screens = [];
+    screenGroups = [];
     playlists = [];
     screenList.replaceChildren();
     $('#emptyState').classList.add('hidden');
@@ -303,6 +353,7 @@ async function loadScreens() {
   }
   notice.classList.add('hidden');
   const nextScreens = data || [];
+  const nextScreenGroups = groupData || [];
   const nextPlaylists = playlistData || [];
   const playlistIds = nextPlaylists.map(item => item.id);
   const { data: playlistSlideData, error: playlistSlideError } = playlistIds.length
@@ -323,6 +374,7 @@ async function loadScreens() {
   ));
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   screens = nextScreens;
+  screenGroups = nextScreenGroups;
   playlists = nextPlaylists;
   playlistSlides = playlistSlideData || [];
   channels = nextChannels;
@@ -332,6 +384,7 @@ async function loadScreens() {
   mediaLibrary = mediaData || [];
   updateChannelControls();
   updateChannelManagement();
+  renderScreenGroups();
   renderPlaylistLibrary();
   renderMediaLibrary();
   $('#emptyState').classList.toggle('hidden', screens.length > 0);
@@ -390,6 +443,8 @@ function updateRoleVisibility() {
   $('#mediaLibraryForm').classList.toggle('hidden', !editor);
   $('#teamPanel').classList.toggle('hidden', !admin);
   $('#createPlaylistForm').closest('.playlist-library-bar').classList.toggle('role-hidden', !editor);
+  $('#createScreenGroupForm').classList.toggle('hidden', !admin);
+  document.querySelectorAll('.admin-only').forEach(control => control.classList.toggle('hidden', !admin));
   document.querySelectorAll('.workspace-tab').forEach(button => {
     button.classList.toggle('hidden', (button.dataset.workspace === 'team' && !admin)
       || (button.dataset.workspace !== 'screens' && !currentRole));
@@ -400,6 +455,30 @@ function updateRoleVisibility() {
 function updateChannelControls() {
   const select = $('#channelPlaylist');
   if (select) select.innerHTML = `<option value="">Välj spellista</option>${playlists.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('')}`;
+}
+
+function screenGroupOptions(selectedId = '') {
+  return `<option value="">Ingen grupp</option>${screenGroups.map(group => `<option value="${esc(group.id)}" ${group.id === selectedId ? 'selected' : ''}>${esc(group.name)}</option>`).join('')}`;
+}
+
+function renderScreenGroups() {
+  const currentFilter = $('#groupFilter').value;
+  $('#groupFilter').innerHTML = `<option value="all">Alla grupper</option><option value="ungrouped">Ingen grupp</option>${screenGroups.map(group => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join('')}`;
+  $('#groupFilter').value = currentFilter === 'all' || currentFilter === 'ungrouped' || screenGroups.some(group => group.id === currentFilter) ? currentFilter : 'all';
+  $('#newScreenGroup').innerHTML = screenGroupOptions();
+  $('#bulkScreenGroup').innerHTML = `<option value="__skip__">Välj grupp</option>${screenGroupOptions()}`;
+  const admin = currentRole === 'admin';
+  const list = $('#screenGroupList');
+  list.replaceChildren(...screenGroups.map(group => {
+    const count = screens.filter(screen => screen.group_id === group.id).length;
+    const row = document.createElement('div');
+    row.className = 'screen-group-item';
+    row.innerHTML = admin
+      ? `<form data-screen-group-edit="${esc(group.id)}"><input name="name" value="${esc(group.name)}" maxlength="64" required aria-label="Gruppnamn" /><input name="description" value="${esc(group.description || '')}" maxlength="160" placeholder="Beskrivning" aria-label="Gruppbeskrivning" /><span class="screen-group-count">${count} skärmar</span><button class="button ghost small" type="submit">Spara</button><button class="icon-button delete" type="button" data-screen-group-delete="${esc(group.id)}" aria-label="Ta bort grupp ${esc(group.name)}">×</button></form>`
+      : `<strong>${esc(group.name)}</strong><span>${esc(group.description || '')}</span><span class="screen-group-count">${count} skärmar</span>`;
+    return row;
+  }));
+  if (!screenGroups.length) list.innerHTML = '<span class="screen-groups-empty">Inga grupper ännu. Skärmar kan fortfarande hanteras var för sig.</span>';
 }
 
 function updateChannelManagement() {
@@ -566,6 +645,7 @@ function updateScreenSummary() {
 
 $('#screenSearch').addEventListener('input', applyScreenFilters);
 $('#screenFilter').addEventListener('change', applyScreenFilters);
+$('#groupFilter').addEventListener('change', applyScreenFilters);
 $('#selectVisibleScreens').addEventListener('click', () => {
   const visibleCards = [...screenList.querySelectorAll('.screen-card:not(.hidden)')].filter(isCardVisible);
   const allSelected = visibleCards.length > 0 && visibleCards.every(card => selectedScreenIds.has(card.dataset.screenId));
@@ -585,10 +665,12 @@ $('#clearScreenSelection').addEventListener('click', () => {
   updateBulkScreenActions();
 });
 document.querySelectorAll('[data-bulk-command]').forEach(button => button.addEventListener('click', () => queueBulkPlayerCommand(button.dataset.bulkCommand, button)));
+$('#assignSelectedGroup').addEventListener('click', assignSelectedScreensToGroup);
 
 function applyScreenFilters() {
   const query = $('#screenSearch').value.trim().toLocaleLowerCase('sv-SE');
   const filter = $('#screenFilter').value;
+  const selectedGroup = $('#groupFilter').value;
   const visible = [];
   screenList.querySelectorAll('.screen-card').forEach(card => {
     const screen = screens.find(item => item.id === card.dataset.screenId);
@@ -597,7 +679,10 @@ function applyScreenFilters() {
       || (filter === 'online' && screen && isOnline(screen))
       || (filter === 'offline' && screen && !isOnline(screen))
       || (filter === 'pairing' && Boolean(screen?.pair_code));
-    const show = matchesName && matchesStatus;
+    const matchesGroup = selectedGroup === 'all'
+      || (selectedGroup === 'ungrouped' && !screen?.group_id)
+      || (screen?.group_id === selectedGroup);
+    const show = matchesName && matchesStatus && matchesGroup;
     card.classList.toggle('hidden', !show);
     if (show) visible.push(card);
   });
@@ -606,6 +691,28 @@ function applyScreenFilters() {
   });
   $('#visibleScreenCount').textContent = `${visible.length} visade`;
   updateBulkScreenActions();
+}
+
+async function assignSelectedScreensToGroup() {
+  if (currentRole !== 'admin' || selectedScreenIds.size === 0) return;
+  const value = $('#bulkScreenGroup').value;
+  if (value === '__skip__') return toast('Välj en grupp eller ”Ingen grupp”.', true);
+  const group_id = value || null;
+  const targets = screens.filter(screen => selectedScreenIds.has(screen.id));
+  const button = $('#assignSelectedGroup');
+  button.disabled = true;
+  const failures = [];
+  try {
+    for (const screen of targets) {
+      const { error } = await supabase.from('screens').update({ group_id }).eq('id', screen.id);
+      if (error) failures.push(screen.name);
+    }
+    const groupName = screenGroups.find(group => group.id === group_id)?.name || 'Ingen grupp';
+    toast(`${targets.length - failures.length} skärmar flyttades till ”${groupName}”.${failures.length ? ` Misslyckades: ${failures.join(', ')}.` : ''}`, failures.length > 0);
+    await loadScreens();
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function isCardVisible(card) {
@@ -759,14 +866,16 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   const operatingDays = [[1, 'Mån'], [2, 'Tis'], [3, 'Ons'], [4, 'Tor'], [5, 'Fre'], [6, 'Lör'], [7, 'Sön']];
   const selectedOperatingDays = screen.operating_weekdays == null ? operatingDays.map(([day]) => day) : screen.operating_weekdays.map(Number);
   const channelOptions = [`<option value="">Välj kanal</option>`, ...channels.map(channel => `<option value="${esc(channel.id)}">${esc(channel.name)} · ${channelPlaylists.filter(item => item.channel_id === channel.id).length} spellistor</option>`)].join('');
+  const screenGroup = screenGroups.find(group => group.id === screen.group_id);
   card.innerHTML = `
     <div class="screen-head">
-      <div class="screen-title-wrap"><input class="screen-select ${canEdit ? '' : 'hidden'}" type="checkbox" ${selectedScreenIds.has(screen.id) ? 'checked' : ''} aria-label="Välj ${esc(screen.name)}" /><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · möjlig dubblett (${sameNameCount} med samma namn)` : ''}</div></div></div>
+      <div class="screen-title-wrap"><input class="screen-select ${canEdit ? '' : 'hidden'}" type="checkbox" ${selectedScreenIds.has(screen.id) ? 'checked' : ''} aria-label="Välj ${esc(screen.name)}" /><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${esc(screenGroup?.name || 'Ingen grupp')} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · möjlig dubblett (${sameNameCount} med samma namn)` : ''}</div></div></div>
       <div class="screen-actions">${pending}<button class="button ghost small renew-pairing ${canAdmin ? '' : 'hidden'}">Ny kod</button><button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
     </div>
     <div class="screen-status-row"><div class="screen-live-status ${isOnline(screen) ? 'online' : 'offline'}"><span class="status-indicator"></span><span class="status-label">${isOnline(screen) ? 'Online nu' : 'Offline'}</span><span class="last-seen">${screen.last_seen_at ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Spelaren har inte rapporterat ännu'}</span></div><div class="current-content ${isOnline(screen) ? '' : 'stale'}"><span class="current-content-label">VISAS JUST NU</span><strong class="current-title">${esc(isOnline(screen) ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt')}</strong><span class="current-kind">${esc(isOnline(screen) ? kindLabel(screen.current_kind) : 'Skärmen är offline')}</span><div class="current-preview"></div></div></div>
     <div class="screen-body">
       <p class="pair-help">${screen.pair_code ? 'Öppna Signage Player på TV:n och skriv koden ovan. Koden kan bara användas en gång.' : 'TV:n är parkopplad. Nytt innehåll synkas automatiskt och sparas lokalt för offlinevisning.'}</p>
+      <label class="screen-group-assignment ${canAdmin ? '' : 'hidden'}">Skärmgrupp<select class="screen-group-select">${screenGroupOptions(screen.group_id || '')}</select><span>Använd grupper för att sortera skärmar efter plats eller team.</span></label>
       <form class="screen-operating-form ${canAdmin ? '' : 'hidden'}"><div class="operating-heading"><strong>Öppettider</strong><span>TV:n visar svart utanför tiderna men fortsätter vara ansluten. Tider följer TV:ns lokala klocka.</span></div><div class="operating-days">${operatingDays.map(([day, label]) => `<label><input type="checkbox" name="operating_weekdays" value="${day}" ${selectedOperatingDays.includes(day) ? 'checked' : ''} /><span>${label}</span></label>`).join('')}</div><div class="operating-times"><label>Från<input name="operating_start_time" type="time" value="${esc(screen.operating_start_time || '')}" /></label><label>Till<input name="operating_end_time" type="time" value="${esc(screen.operating_end_time || '')}" /></label></div><button class="button ghost small" type="submit">Spara öppettider</button></form>
       <label class="screen-playback-setting ${canAdmin ? '' : 'hidden'}">Uppspelningsläge<select class="screen-playback-mode"><option value="independent" ${screen.playback_mode !== 'sync' ? 'selected' : ''}>Fristående · starta lokalt</option><option value="sync" ${screen.playback_mode === 'sync' ? 'selected' : ''}>Synkad · gemensam tidslinje</option></select><span>Synka skärmar med samma aktiva innehållssekvens och schema. TV-enheterna behöver rätt klocka.</span></label>
       <label class="screen-autostart-setting ${canAdmin ? '' : 'hidden'}"><span><strong>Starta spelaren när TV:n slås på</strong><small>Spelaren öppnas automatiskt efter omstart eller strömavbrott.</small></span><input class="screen-autostart" type="checkbox" ${screen.autostart_enabled !== false ? 'checked' : ''} aria-label="Starta Signage Player automatiskt vid TV-start" /></label>
@@ -788,6 +897,13 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     if (event.currentTarget.checked) selectedScreenIds.add(screen.id);
     else selectedScreenIds.delete(screen.id);
     updateBulkScreenActions();
+  });
+  card.querySelector('.screen-group-select').addEventListener('change', async event => {
+    const group_id = event.currentTarget.value || null;
+    const { error } = await supabase.from('screens').update({ group_id }).eq('id', screen.id);
+    if (error) return toast(error.message, true);
+    toast(`”${screen.name}” flyttades till ”${screenGroups.find(group => group.id === group_id)?.name || 'Ingen grupp'}”.`);
+    await loadScreens();
   });
   updateCurrentPreview(card.querySelector('.current-preview'), screen, isOnline(screen));
 
