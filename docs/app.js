@@ -10,6 +10,7 @@ const notice = $('#setupNotice');
 let currentUser = null;
 let screens = [];
 let screenGroups = [];
+let screenGroupMembers = [];
 let playlists = [];
 let playlistSlides = [];
 let channels = [];
@@ -97,6 +98,7 @@ function setSession(user) {
     screensLoadId++;
     screens = [];
     screenGroups = [];
+    screenGroupMembers = [];
     playlists = [];
     playlistSlides = [];
     channels = [];
@@ -185,6 +187,17 @@ $('#createScreenGroupForm').addEventListener('submit', async event => {
 });
 
 $('#screenGroupList').addEventListener('submit', async event => {
+  const addMemberForm = event.target.closest('[data-screen-group-member-add]');
+  if (addMemberForm) {
+    event.preventDefault();
+    const user_id = String(new FormData(addMemberForm).get('user_id') || '');
+    if (!user_id) return toast('Välj en gruppmedlem först.', true);
+    const { error } = await supabase.from('screen_group_members').insert({ group_id: addMemberForm.dataset.screenGroupMemberAdd, user_id });
+    if (error) return toast(error.message, true);
+    toast('Gruppåtkomsten sparades.');
+    await loadScreens();
+    return;
+  }
   const form = event.target.closest('[data-screen-group-edit]');
   if (!form) return;
   event.preventDefault();
@@ -199,6 +212,18 @@ $('#screenGroupList').addEventListener('submit', async event => {
 });
 
 $('#screenGroupList').addEventListener('click', async event => {
+  const removeMember = event.target.closest('[data-screen-group-member-delete]');
+  if (removeMember && currentRole === 'admin') {
+    const member = screenGroupMembers.find(item => item.id === removeMember.dataset.screenGroupMemberDelete);
+    if (!member) return;
+    const name = teamMembers.find(item => item.user_id === member.user_id)?.email || 'medlemmen';
+    if (!confirm(`Ta bort ${name} från den här gruppen?`)) return;
+    const { error } = await supabase.from('screen_group_members').delete().eq('id', member.id);
+    if (error) return toast(error.message, true);
+    toast('Gruppåtkomsten togs bort.');
+    await loadScreens();
+    return;
+  }
   const button = event.target.closest('[data-screen-group-delete]');
   if (!button || currentRole !== 'admin') return;
   const group = screenGroups.find(item => item.id === button.dataset.screenGroupDelete);
@@ -316,7 +341,8 @@ async function loadScreens() {
     { data: channelScheduleData, error: channelScheduleError },
     { data: commandData, error: commandError },
     { data: mediaData, error: mediaError },
-    { data: groupData, error: groupError }
+    { data: groupData, error: groupError },
+    { data: groupMemberData, error: groupMemberError }
   ] = await Promise.all([
     supabase.from('screens').select('*').order('created_at', { ascending: false }),
     supabase.from('playlists').select('*').order('name', { ascending: true }),
@@ -326,7 +352,8 @@ async function loadScreens() {
     supabase.from('screen_channel_schedules').select('*').order('priority', { ascending: true }),
     supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100),
     supabase.from('media_library').select('*').order('updated_at', { ascending: false }).limit(300),
-    supabase.from('screen_groups').select('*').order('name', { ascending: true })
+    supabase.from('screen_groups').select('*').order('name', { ascending: true }),
+    supabase.from('screen_group_members').select('id,group_id,user_id,created_at').order('created_at', { ascending: true })
   ]);
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
@@ -338,6 +365,7 @@ async function loadScreens() {
   if (commandError) return toast(commandError.message, true);
   if (mediaError && mediaError.code !== '42P01') return toast(mediaError.message, true);
   if (groupError) return toast(groupError.message, true);
+  if (groupMemberError) return toast(groupMemberError.message, true);
   teamMembers = memberData || [];
   currentRole = teamMembers.find(member => member.user_id === userId)?.role || null;
   updateRoleVisibility();
@@ -345,6 +373,7 @@ async function loadScreens() {
     showNotice('Det här kontot saknar en teamroll. Be en administratör att tilldela åtkomst.');
     screens = [];
     screenGroups = [];
+    screenGroupMembers = [];
     playlists = [];
     screenList.replaceChildren();
     $('#emptyState').classList.add('hidden');
@@ -375,6 +404,7 @@ async function loadScreens() {
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   screens = nextScreens;
   screenGroups = nextScreenGroups;
+  screenGroupMembers = groupMemberData || [];
   playlists = nextPlaylists;
   playlistSlides = playlistSlideData || [];
   channels = nextChannels;
@@ -388,6 +418,11 @@ async function loadScreens() {
   renderPlaylistLibrary();
   renderMediaLibrary();
   $('#emptyState').classList.toggle('hidden', screens.length > 0);
+  if (screens.length === 0 && currentRole === 'group_member') {
+    $('#emptyState').innerHTML = '<div class="empty-icon">▣</div><h2>Ingen gruppåtkomst ännu</h2><p>Be en administratör lägga till dig i den skärmgrupp du ska kunna följa.</p>';
+  } else {
+    $('#emptyState').innerHTML = '<div class="empty-icon">▣</div><h2>Din första skärm börjar här</h2><p>Skapa en skärm, koppla TV-appen med parkopplingskoden och lägg till ditt första innehåll.</p>';
+  }
   const duplicateNames = new Map();
   screens.forEach(screen => {
     const key = String(screen.name || '').trim().toLocaleLowerCase('sv-SE');
@@ -471,11 +506,14 @@ function renderScreenGroups() {
   const list = $('#screenGroupList');
   list.replaceChildren(...screenGroups.map(group => {
     const count = screens.filter(screen => screen.group_id === group.id).length;
+    const memberships = screenGroupMembers.filter(item => item.group_id === group.id);
     const row = document.createElement('div');
     row.className = 'screen-group-item';
+    const memberUsers = new Set(memberships.map(item => item.user_id));
+    const availableMembers = teamMembers.filter(member => member.role === 'group_member' && !memberUsers.has(member.user_id));
     row.innerHTML = admin
-      ? `<form data-screen-group-edit="${esc(group.id)}"><input name="name" value="${esc(group.name)}" maxlength="64" required aria-label="Gruppnamn" /><input name="description" value="${esc(group.description || '')}" maxlength="160" placeholder="Beskrivning" aria-label="Gruppbeskrivning" /><span class="screen-group-count">${count} skärmar</span><button class="button ghost small" type="submit">Spara</button><button class="icon-button delete" type="button" data-screen-group-delete="${esc(group.id)}" aria-label="Ta bort grupp ${esc(group.name)}">×</button></form>`
-      : `<strong>${esc(group.name)}</strong><span>${esc(group.description || '')}</span><span class="screen-group-count">${count} skärmar</span>`;
+      ? `<form class="screen-group-edit" data-screen-group-edit="${esc(group.id)}"><input name="name" value="${esc(group.name)}" maxlength="64" required aria-label="Gruppnamn" /><input name="description" value="${esc(group.description || '')}" maxlength="160" placeholder="Beskrivning" aria-label="Gruppbeskrivning" /><span class="screen-group-count">${count} skärmar</span><button class="button ghost small" type="submit">Spara</button><button class="icon-button delete" type="button" data-screen-group-delete="${esc(group.id)}" aria-label="Ta bort grupp ${esc(group.name)}">×</button></form><div class="screen-group-access"><strong>Gruppåtkomst · ${memberships.length}</strong><div class="screen-group-members">${memberships.map(item => `<span class="screen-group-member">${esc(teamMembers.find(member => member.user_id === item.user_id)?.email || 'Okänd medlem')}<button class="icon-button delete" type="button" data-screen-group-member-delete="${esc(item.id)}" aria-label="Ta bort gruppåtkomst">×</button></span>`).join('') || '<span class="screen-groups-empty">Inga gruppmedlemmar.</span>'}</div><form class="screen-group-member-add" data-screen-group-member-add="${esc(group.id)}"><select name="user_id" aria-label="Gruppmedlem att lägga till" required><option value="">Lägg till gruppmedlem</option>${availableMembers.map(member => `<option value="${esc(member.user_id)}">${esc(member.email)}</option>`).join('')}</select><button class="button ghost small" type="submit" ${availableMembers.length ? '' : 'disabled'}>Lägg till</button>${availableMembers.length ? '' : '<span class="screen-groups-empty">Skapa först en gruppmedlem under Team.</span>'}</form></div>`
+      : `<div class="screen-group-readonly"><strong>${esc(group.name)}</strong><span>${esc(group.description || '')}</span><span class="screen-group-count">${count} skärmar</span></div>`;
     return row;
   }));
   if (!screenGroups.length) list.innerHTML = '<span class="screen-groups-empty">Inga grupper ännu. Skärmar kan fortfarande hanteras var för sig.</span>';
@@ -615,8 +653,8 @@ function renderTeamMembers() {
   const list = $('#teamList');
   if (!list) return;
   if (currentRole !== 'admin') { list.replaceChildren(); return; }
-  const labels = { admin: 'Admin', editor: 'Redaktör', viewer: 'Läsbehörig' };
-  list.innerHTML = teamMembers.map(member => `<div class="team-member" data-user-id="${esc(member.user_id)}"><div class="team-member-identity"><strong>${esc(member.email)}</strong><span>${labels[member.role] || esc(member.role)}</span></div><select class="member-role" aria-label="Roll för ${esc(member.email)}"><option value="editor" ${member.role === 'editor' ? 'selected' : ''}>Redaktör</option><option value="viewer" ${member.role === 'viewer' ? 'selected' : ''}>Läsbehörig</option><option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option></select><button class="button ghost small save-member">Spara</button><button class="button ghost small remove-member">Ta bort</button></div>`).join('') || '<p class="team-empty">Inga teammedlemmar ännu.</p>';
+  const labels = { admin: 'Admin', editor: 'Redaktör · alla skärmar', viewer: 'Läsbehörig · alla skärmar', group_member: 'Gruppmedlem · begränsad gruppåtkomst' };
+  list.innerHTML = teamMembers.map(member => `<div class="team-member" data-user-id="${esc(member.user_id)}"><div class="team-member-identity"><strong>${esc(member.email)}</strong><span>${labels[member.role] || esc(member.role)}</span></div><select class="member-role" aria-label="Roll för ${esc(member.email)}"><option value="editor" ${member.role === 'editor' ? 'selected' : ''}>Redaktör · alla skärmar</option><option value="viewer" ${member.role === 'viewer' ? 'selected' : ''}>Läsbehörig · alla skärmar</option><option value="group_member" ${member.role === 'group_member' ? 'selected' : ''}>Gruppmedlem · valda grupper</option><option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option></select><button class="button ghost small save-member">Spara</button><button class="button ghost small remove-member">Ta bort</button></div>`).join('') || '<p class="team-empty">Inga teammedlemmar ännu.</p>';
   list.querySelectorAll('.save-member').forEach(button => button.addEventListener('click', async () => {
     const row = button.closest('.team-member');
     const member = teamMembers.find(item => item.user_id === row.dataset.userId);
