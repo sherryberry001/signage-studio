@@ -974,6 +974,8 @@ create table if not exists public.screen_commands (
 
 create index if not exists screen_commands_pending_idx
   on public.screen_commands(screen_id, created_at) where status in ('pending', 'running');
+create unique index if not exists screen_commands_one_pending_per_type_idx
+  on public.screen_commands(screen_id, command) where status = 'pending';
 
 alter table public.screen_commands enable row level security;
 revoke all on public.screen_commands from anon, authenticated;
@@ -1006,6 +1008,8 @@ begin
 
   insert into public.screen_commands(screen_id, command)
   values (input_screen_id, input_command)
+  on conflict (screen_id, command) where status = 'pending'
+  do update set command = excluded.command
   returning id into command_id;
   return command_id;
 end;
@@ -2295,7 +2299,8 @@ begin
   insert into public.screen_publications(screen_id, revision, payload, published_by)
   values (input_screen_id, next_revision, content_snapshot, auth.uid());
   insert into public.screen_commands(screen_id, command)
-  values (input_screen_id, 'sync_now');
+  values (input_screen_id, 'sync_now')
+  on conflict (screen_id, command) where status = 'pending' do nothing;
   return next_revision;
 end;
 $$;
@@ -2501,7 +2506,8 @@ begin
   insert into public.screen_publications(screen_id, revision, payload, published_by)
   values (input_screen_id, next_revision, restored_payload, auth.uid());
   insert into public.screen_commands(screen_id, command)
-  values (input_screen_id, 'sync_now');
+  values (input_screen_id, 'sync_now')
+  on conflict (screen_id, command) where status = 'pending' do nothing;
 
   return next_revision;
 end;
@@ -2624,7 +2630,8 @@ begin
   insert into public.screen_publications(screen_id, revision, payload, published_by)
   values (request_row.screen_id, next_revision, request_row.payload, auth.uid());
   insert into public.screen_commands(screen_id, command)
-  values (request_row.screen_id, 'sync_now');
+  values (request_row.screen_id, 'sync_now')
+  on conflict (screen_id, command) where status = 'pending' do nothing;
   update public.screen_publication_requests
   set status = 'approved', reviewed_by = auth.uid(), reviewed_at = now(), review_note = null
   where id = request_row.id;
