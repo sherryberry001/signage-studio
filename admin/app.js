@@ -1327,6 +1327,66 @@ function renderDeviceDiagnostics(screen) {
   return `<strong>${esc(screen.player_version ? `Spelare v${screen.player_version}` : 'Spelarversion okänd')}</strong><span>${details || 'Enhetsinformation saknas'}</span><small>Rapporterad ${esc(reported)}</small>`;
 }
 
+async function downloadScreenSupportBundle(screen, button) {
+  button.disabled = true;
+  try {
+    const [{ data: healthEvents, error: healthError }, { data: feedStatuses, error: feedError }] = await Promise.all([
+      supabase.from('screen_health_events').select('status,observed_at,last_seen_at')
+        .eq('screen_id', screen.id).order('observed_at', { ascending: false }).limit(50),
+      supabase.from('screen_feed_status').select('feed_title,source_host,status,last_attempt_at,last_success_at,last_http_status,last_error_code')
+        .eq('screen_id', screen.id).order('last_attempt_at', { ascending: false }).limit(50)
+    ]);
+    if (healthError) return toast(`Kunde inte läsa skärmhistoriken: ${healthError.message}`, true);
+    if (feedError) return toast(`Kunde inte läsa feedstatus: ${feedError.message}`, true);
+    const group = screenGroups.find(item => item.id === screen.group_id);
+    const commands = screenCommands.filter(item => item.screen_id === screen.id).slice(0, 50).map(item => ({
+      command: item.command,
+      status: item.status,
+      created_at: item.created_at,
+      completed_at: item.completed_at
+    }));
+    const bundle = {
+      format: 'signage-studio-support-bundle-v1',
+      generated_at: new Date().toISOString(),
+      note: 'Content text, pairing codes, feed URLs, and credentials are intentionally excluded.',
+      screen: {
+        id: screen.id,
+        name: screen.name,
+        group: group?.name || null,
+        is_active: screen.is_active,
+        online_now: isOnline(screen),
+        last_seen_at: screen.last_seen_at,
+        player_version: screen.player_version,
+        device_model: screen.device_model,
+        android_version: screen.android_version,
+        display_size: screen.display_size,
+        network_type: screen.network_type,
+        device_updated_at: screen.device_updated_at,
+        playback_mode: screen.playback_mode,
+        autostart_enabled: screen.autostart_enabled,
+        layout_type: screen.layout_type,
+        operating_weekdays: screen.operating_weekdays,
+        operating_start_time: screen.operating_start_time,
+        operating_end_time: screen.operating_end_time
+      },
+      screen_health: healthEvents || [],
+      feed_health: feedStatuses || [],
+      recent_commands: commands
+    };
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const safeName = String(screen.name || 'screen').normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'screen';
+    link.href = url;
+    link.download = `signage-support-${safeName}-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast(`Felsökningspaketet för ”${screen.name}” laddades ned.`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function renderContentPreview(container, screen) {
   if (screen.current_kind === 'image' && /^https?:\/\//i.test(screen.current_source_url || '')) {
     const image = document.createElement('img');
@@ -1391,7 +1451,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
       <label class="playlist-assignment ${canAdmin ? '' : 'hidden'}">Spellista för den här skärmen<select class="screen-playlist">${playlistOptions}</select><span>En spellista kan delas av flera skärmar.</span></label>
       <form class="screen-layout-form ${canAdmin ? '' : 'hidden'}"><label>Skärmlayout<select name="layout_type"><option value="single" ${screen.layout_type === 'single' ? 'selected' : ''}>En zon · fullskärm</option><option value="bottom_ticker" ${screen.layout_type === 'bottom_ticker' ? 'selected' : ''}>Huvudyta + ticker längst ned</option><option value="side_panel" ${screen.layout_type === 'side_panel' ? 'selected' : ''}>Huvudyta + sidopanel</option></select></label><label>Spellista i zon 2<select name="zone_playlist_id"><option value="">Visa zontext</option>${playlists.map(playlist => `<option value="${esc(playlist.id)}" ${playlist.id === screen.zone_playlist_id ? 'selected' : ''}>${esc(playlist.name)}</option>`).join('')}</select></label><label class="layout-text-label">Zontext<input name="layout_text" maxlength="500" value="${esc(screen.layout_text || '')}" placeholder="Visas om zonspellistan saknar aktivt innehåll" /></label><button class="button ghost small" type="submit">Spara layout</button></form>
       <section class="channel-assignment ${canEdit ? '' : 'hidden'}"><div class="channel-heading"><div><strong>Kanalschema</strong><span>Aktiv kanal prioriteras framför skärmens grundspellista. Lägre prioritetstal vinner.</span></div></div><form class="channel-schedule-form"><select name="channel_id" required>${channelOptions}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Kanalprioritet" />${scheduleFields()}<button class="button ghost small" type="submit">＋ Schemalägg kanal</button></form><div class="channel-schedule-list">${assignedChannels.map(item => { const channel = channels.find(c => c.id === item.channel_id); return `<div class="channel-schedule-row"><div><strong>${esc(channel?.name || 'Okänd kanal')}</strong><span>Prioritet ${item.priority} · ${scheduleSummary(item)}</span></div><button class="button ghost small remove-channel-schedule" data-id="${esc(item.id)}">Ta bort</button></div>`; }).join('') || '<div class="slide-sub">Inga kanaler schemalagda för den här skärmen.</div>'}</div></section>
-      <div class="player-operations ${canEdit ? '' : 'hidden'}"><div><strong>Fjärråtgärder</strong><span class="player-command-status" data-command-status>${esc(formatCommandStatus(latestCommand))}</span></div><div class="player-operation-buttons"><button class="button ghost small" data-player-command="sync_now">Synka nu</button><button class="button ghost small" data-player-command="restart_player">Starta om spelaren</button></div></div>
+      <div class="player-operations ${canEdit ? '' : 'hidden'}"><div><strong>Fjärråtgärder</strong><span class="player-command-status" data-command-status>${esc(formatCommandStatus(latestCommand))}</span></div><div class="player-operation-buttons"><button class="button ghost small" data-player-command="sync_now">Synka nu</button><button class="button ghost small" data-player-command="restart_player">Starta om spelaren</button><button class="button ghost small" data-support-bundle>Hämta felsökningspaket</button></div></div>
       <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id && canEdit ? '' : 'hidden'}">Återgå till spellistan</button></div>
       <div class="playlist">${slides.map((slide, index) => renderSlide(slide, index, slides.length, canEdit)).join('') || '<div class="slide-sub">Spellistan är tom. Lägg till ett objekt nedan.</div>'}</div>
       ${channelSlides.length ? `<details class="screen-channel-content"><summary>Innehåll från skärmens kanaler · ${channelSlides.length} objekt</summary><div class="playlist">${channelSlides.map(slide => `<div class="slide-row"><div class="slide-thumb">${slide.kind === 'image' ? '▧' : slide.kind === 'video' ? '▶' : slide.kind === 'feed' || slide.kind === 'web' ? '↗' : slide.kind === 'clock' ? '◷' : 'T'}</div><div><div class="slide-title">${esc(slide.title || kindLabel(slide.kind))}</div><div class="slide-sub">${esc(kindLabel(slide.kind))} · ${esc(playlists.find(item => item.id === slide.playlist_id)?.name || 'spellista')}</div></div><div class="slide-buttons"><button class="button ghost small channel-show-now" data-id="${esc(slide.id)}" ${canEdit ? '' : 'hidden'}>Visa nu</button></div></div>`).join('')}</div></details>` : ''}
@@ -1541,6 +1601,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
       button.disabled = false;
     }
   }));
+  card.querySelector('[data-support-bundle]').addEventListener('click', event => downloadScreenSupportBundle(screen, event.currentTarget));
   card.querySelector('.delete-screen').addEventListener('click', async () => {
     if (!confirm(`Ta bort skärmen “${screen.name}” och dess spellista?`)) return;
     const { error } = await supabase.from('screens').delete().eq('id', screen.id);
