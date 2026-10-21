@@ -151,6 +151,8 @@ let teamMembers = [];
 let screenCommands = [];
 let screenPublications = [];
 let screenBroadcasts = [];
+let screenBroadcastDelivery = [];
+let screenBroadcastDeliveryAvailable = true;
 let mediaLibrary = [];
 let mediaFolders = [];
 let mediaLibraryVersions = [];
@@ -756,7 +758,7 @@ async function loadScreens() {
     supabase.from('screen_group_members').select('id,group_id,user_id,created_at').order('created_at', { ascending: true }),
     supabase.from('locations').select('id,name,description,created_at').order('name', { ascending: true }),
     supabase.from('location_members').select('id,location_id,user_id,created_at').order('created_at', { ascending: true }),
-    supabase.from('screen_broadcasts').select('id,title,body,kind,source_url,duration_seconds,starts_at,ends_at,created_at,cancelled_at,screen_broadcast_targets(screen_id,superseded_at)').is('cancelled_at', null).gt('ends_at', new Date().toISOString()).order('starts_at', { ascending: true }).limit(100)
+    supabase.from('screen_broadcasts').select('id,slide_id,title,body,kind,source_url,duration_seconds,starts_at,ends_at,created_at,cancelled_at,screen_broadcast_targets(screen_id,superseded_at)').is('cancelled_at', null).gt('ends_at', new Date().toISOString()).order('starts_at', { ascending: true }).limit(100)
   ]);
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
@@ -834,6 +836,8 @@ async function loadScreens() {
   channelSchedules = channelScheduleData || [];
   screenCommands = commandData || [];
   screenBroadcasts = broadcastError ? [] : (broadcastData || []);
+  await loadScreenBroadcastDelivery();
+  if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   screenPublications = publicationData || [];
   const latestPublications = new Map();
   const publicationHistory = new Map();
@@ -1998,9 +2002,17 @@ function renderScreenBroadcasts() {
     list.innerHTML = '<span class="screen-groups-empty">Inga planerade eller aktiva tillfälliga utskick.</span>';
     return;
   }
+  const receiptsByTarget = new Map(screenBroadcastDelivery.map(receipt => [`${receipt.broadcast_id}:${receipt.screen_id}`, receipt]));
   list.replaceChildren(...active.map(item => {
     const targetIds = (item.screen_broadcast_targets || []).filter(target => !target.superseded_at || new Date(target.superseded_at).getTime() > now).map(target => target.screen_id);
-    const targetNames = targetIds.map(id => screens.find(screen => screen.id === id)?.name).filter(Boolean);
+    const targets = targetIds.map(id => ({
+      screen: screens.find(screen => screen.id === id),
+      receipt: receiptsByTarget.get(`${item.id}:${id}`)
+    })).filter(target => target.screen);
+    const confirmedCount = targets.filter(({ screen, receipt }) => receipt?.first_shown_at
+      || (isOnline(screen) && screen.current_slide_id === item.slide_id)).length;
+    const showingCount = targets.filter(({ screen }) => isOnline(screen)
+      && screen.current_slide_id === item.slide_id).length;
     const row = document.createElement('article');
     row.className = 'screen-broadcast-row';
     const detail = document.createElement('div');
@@ -2011,8 +2023,33 @@ function renderScreenBroadcasts() {
     const startsLater = startsAt.getTime() > now;
     const kind = item.kind === 'image' ? 'Bild' : item.kind === 'video' ? 'Video' : 'Text';
     const endsAt = new Date(item.ends_at);
-    meta.textContent = `${kind} · ${targetNames.length} skärmar · ${startsLater ? `planerat ${startsAt.toLocaleString('sv-SE')}–${endsAt.toLocaleString('sv-SE')}` : `aktivt till ${endsAt.toLocaleString('sv-SE')}`}${item.body ? ` · ${item.body}` : ''}`;
+    meta.textContent = `${kind} · ${targets.length} skärmar · ${startsLater ? `planerat ${startsAt.toLocaleString('sv-SE')}–${endsAt.toLocaleString('sv-SE')}` : `aktivt till ${endsAt.toLocaleString('sv-SE')}`} · ${showingCount} visar nu · ${screenBroadcastDeliveryAvailable ? `${confirmedCount} har visat` : 'visningskvittens otillgänglig'}${item.body ? ` · ${item.body}` : ''}`;
     detail.append(title, meta);
+    const delivery = document.createElement('details');
+    delivery.className = 'broadcast-delivery';
+    const deliverySummary = document.createElement('summary');
+    deliverySummary.textContent = 'Visa status per skärm';
+    const deliveryItems = document.createElement('div');
+    deliveryItems.className = 'broadcast-delivery-items';
+    targets.forEach(({ screen, receipt }) => {
+      const current = isOnline(screen) && screen.current_slide_id === item.slide_id;
+      const status = startsLater ? 'Planerad'
+        : current ? 'Visas nu'
+        : receipt?.first_shown_at ? `Visad ${new Date(receipt.first_shown_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}`
+        : !screenBroadcastDeliveryAvailable ? 'Kvittens otillgänglig'
+        : isOnline(screen) ? 'Online · väntar på visning'
+        : 'Offline · ej bekräftat';
+      const targetRow = document.createElement('div');
+      targetRow.className = 'broadcast-delivery-item';
+      const name = document.createElement('strong');
+      name.textContent = screen.name;
+      const state = document.createElement('span');
+      state.textContent = status;
+      targetRow.append(name, state);
+      deliveryItems.append(targetRow);
+    });
+    delivery.append(deliverySummary, deliveryItems);
+    detail.append(delivery);
     row.append(detail);
     if (['admin', 'editor'].includes(currentRole)) {
       const cancel = document.createElement('button');
@@ -2024,6 +2061,18 @@ function renderScreenBroadcasts() {
     }
     return row;
   }));
+}
+
+async function loadScreenBroadcastDelivery() {
+  const ids = screenBroadcasts.map(item => item.id);
+  if (!ids.length) {
+    screenBroadcastDelivery = [];
+    screenBroadcastDeliveryAvailable = true;
+    return;
+  }
+  const { data, error } = await supabase.rpc('team_broadcast_delivery_summary', { input_broadcast_ids: ids });
+  screenBroadcastDeliveryAvailable = !error;
+  if (!error) screenBroadcastDelivery = data || [];
 }
 
 function updateBroadcastAssetOptions() {
@@ -2131,10 +2180,11 @@ async function refreshScreenStatus() {
   ] = await Promise.all([
     supabase.from('screens').select('id,last_seen_at,preview_updated_at,current_title,current_body,current_kind,current_source_url,current_slide_id,forced_slide_id,player_version,device_model,android_version,display_size,network_type,device_updated_at,applied_revision,applied_revision_at'),
     supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100),
-    supabase.from('screen_broadcasts').select('id,title,body,kind,source_url,duration_seconds,starts_at,ends_at,created_at,cancelled_at,screen_broadcast_targets(screen_id,superseded_at)').is('cancelled_at', null).gt('ends_at', new Date().toISOString()).order('starts_at', { ascending: true }).limit(100)
+    supabase.from('screen_broadcasts').select('id,slide_id,title,body,kind,source_url,duration_seconds,starts_at,ends_at,created_at,cancelled_at,screen_broadcast_targets(screen_id,superseded_at)').is('cancelled_at', null).gt('ends_at', new Date().toISOString()).order('starts_at', { ascending: true }).limit(100)
   ]);
   if (error || commandError) return;
   if (!broadcastError) screenBroadcasts = broadcastData || [];
+  await loadScreenBroadcastDelivery();
   screenCommands = commandData || [];
   const liveWithPreviews = await Promise.all((data || []).map(async screen => {
     if (!screen.preview_updated_at || !isOnline(screen)) return screen;
