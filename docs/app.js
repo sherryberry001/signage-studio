@@ -133,10 +133,15 @@ let draftPreviewEmptyMessage = 'Inget innehåll i utkastet ännu.';
 let draftPreviewScreen = null;
 let draftPreviewBaseSlides = [];
 let draftPreviewChannelSlides = [];
+let draftPreviewZoneSlides = [];
 let draftPreviewScreenSchedules = [];
+let draftPreviewZoneItem = null;
+let draftPreviewZoneItemCount = 0;
+let draftPreviewZonePosition = 0;
+let draftPreviewZoneText = '';
 let draftPreviewAt = new Date();
 let draftPreviewGeneration = 0;
-let draftPreviewAbortController = null;
+const draftPreviewAbortControllers = new Set();
 let draftPreviewRefreshTimer = null;
 const authView = $('#authView');
 const appView = $('#appView');
@@ -2535,11 +2540,12 @@ function kindLabel(kind) {
   return ({ text: 'Textmeddelande', image: 'Bild', video: 'Video', clock: 'Klocka & datum', feed: 'JSON-feed', web: 'Webbsida / live dashboard', sleep: 'Utanför öppettider', paused: 'Pausad' })[kind] || kind || '—';
 }
 
-function openDraftPreview(screen, slides, channelSlides, assignedChannels) {
+function openDraftPreview(screen, slides, channelSlides, assignedChannels, zoneSlides) {
   const dialog = $('#draftPreviewDialog');
   draftPreviewScreen = screen;
   draftPreviewBaseSlides = slides;
   draftPreviewChannelSlides = channelSlides;
+  draftPreviewZoneSlides = zoneSlides;
   draftPreviewScreenSchedules = assignedChannels;
   draftPreviewAt = new Date();
   $('#draftPreviewAt').value = localDateTimeInput(draftPreviewAt.toISOString());
@@ -2591,6 +2597,18 @@ function isWithinPreviewOperatingHours(screen, date) {
   return false;
 }
 
+function synchronizedPreviewItem(items, date) {
+  if (!items.length) return null;
+  const durations = items.map(item => Math.max(5, Math.min(600, Number(item.duration_seconds) || 15)) * 1000);
+  const cycleDuration = durations.reduce((total, duration) => total + duration, 0);
+  let offset = ((date.getTime() % cycleDuration) + cycleDuration) % cycleDuration;
+  for (let index = 0; index < items.length; index++) {
+    if (offset < durations[index]) return items[index];
+    offset -= durations[index];
+  }
+  return items.at(-1) || null;
+}
+
 function refreshDraftPreviewForTime() {
   const input = $('#draftPreviewAt');
   const selectedTime = input.value ? new Date(input.value) : null;
@@ -2599,6 +2617,10 @@ function refreshDraftPreviewForTime() {
   }
   draftPreviewAt = selectedTime;
   draftPreviewIndex = 0;
+  draftPreviewZoneItem = null;
+  draftPreviewZoneItemCount = 0;
+  draftPreviewZonePosition = 0;
+  draftPreviewZoneText = '';
   if (!draftPreviewScreen?.is_active) {
     draftPreviewItems = [];
     draftPreviewEmptyMessage = 'Skärmen är pausad. Utkastet kan granskas, men spelaren visar inget innehåll förrän skärmen aktiveras.';
@@ -2643,6 +2665,19 @@ function refreshDraftPreviewForTime() {
       .filter(item => isPreviewItemActive(item, draftPreviewAt))
       .map(item => ({ ...item, previewSource: 'Skärmens grundspellista' }));
   }
+  const forcedCastActive = draftPreviewScreen.forced_slide_id
+    && (!draftPreviewScreen.forced_until || draftPreviewAt.getTime() < new Date(draftPreviewScreen.forced_until).getTime());
+  if (draftPreviewScreen.layout_type !== 'single' && !forcedCastActive) {
+    const zoneSlides = draftPreviewZoneSlides.filter(item => isPreviewItemActive(item, draftPreviewAt))
+      .sort((left, right) => Number(left.sort_order || 0) - Number(right.sort_order || 0)
+        || new Date(left.created_at || 0) - new Date(right.created_at || 0));
+    draftPreviewZoneItemCount = zoneSlides.length;
+    draftPreviewZoneItem = draftPreviewScreen.playback_mode === 'sync'
+      ? synchronizedPreviewItem(zoneSlides, draftPreviewAt)
+      : zoneSlides[0] || null;
+    draftPreviewZonePosition = Math.max(0, zoneSlides.findIndex(item => item.id === draftPreviewZoneItem?.id));
+    if (!draftPreviewZoneItem) draftPreviewZoneText = String(draftPreviewScreen.layout_text || '').trim();
+  }
   draftPreviewEmptyMessage = 'Inget utkast är schemalagt att visas vid den valda tiden.';
   renderDraftPreviewItem();
 }
@@ -2656,25 +2691,27 @@ function renderDraftPreviewItem() {
   const previewTimeLabel = new Intl.DateTimeFormat('sv-SE', { dateStyle: 'short', timeStyle: 'short' }).format(draftPreviewAt);
   clearInterval(draftPreviewRefreshTimer);
   draftPreviewRefreshTimer = null;
-  draftPreviewAbortController?.abort();
-  draftPreviewAbortController = null;
+  draftPreviewAbortControllers.forEach(controller => controller.abort());
+  draftPreviewAbortControllers.clear();
   const generation = ++draftPreviewGeneration;
   const item = draftPreviewItems[draftPreviewIndex];
   stage.replaceChildren();
   if (!item) {
     const empty = document.createElement('div');
-    empty.className = 'draft-preview-empty';
+    empty.className = 'draft-preview-empty draft-preview-primary';
     empty.textContent = draftPreviewEmptyMessage;
-    stage.append(empty);
+    const composition = createDraftPreviewComposition(empty, generation);
+    stage.append(composition);
     position.textContent = `0 objekt · ${previewTimeLabel}`;
     previous.disabled = true;
     next.disabled = true;
-    refresh.disabled = true;
+    refresh.disabled = !['feed','web'].includes(draftPreviewZoneItem?.kind);
     return;
   }
 
   const frame = document.createElement('article');
   frame.className = `draft-preview-frame preview-${item.kind || 'unknown'}`;
+  frame.classList.add('draft-preview-primary');
   const badge = document.createElement('span');
   badge.className = 'draft-preview-source';
   badge.textContent = item.previewSource;
@@ -2745,11 +2782,74 @@ function renderDraftPreviewItem() {
   caption.className = 'draft-preview-caption';
   caption.textContent = `${kindLabel(item.kind)} · ${Number(item.duration_seconds) || 0} sekunder`;
   frame.append(caption);
-  stage.append(frame);
+  stage.append(createDraftPreviewComposition(frame, generation));
   position.textContent = `${draftPreviewIndex + 1} av ${draftPreviewItems.length} · ${previewTimeLabel}`;
   previous.disabled = draftPreviewIndex === 0;
   next.disabled = draftPreviewIndex >= draftPreviewItems.length - 1;
-  refresh.disabled = !['feed','web'].includes(item.kind);
+  refresh.disabled = !['feed','web'].includes(item.kind) && !['feed','web'].includes(draftPreviewZoneItem?.kind);
+}
+
+function createDraftPreviewComposition(primary, generation) {
+  const layout = draftPreviewScreen?.layout_type || 'single';
+  const showZone = layout !== 'single' && Boolean(draftPreviewZoneItem || draftPreviewZoneText);
+  const composition = document.createElement('div');
+  composition.className = `draft-preview-composition layout-${showZone ? layout : 'single'}`;
+  composition.append(primary);
+  if (!showZone) return composition;
+
+  const zone = document.createElement('aside');
+  zone.className = 'draft-preview-zone';
+  const zoneLabel = document.createElement('span');
+  zoneLabel.className = 'draft-preview-zone-label';
+  if (draftPreviewZoneItem) {
+    zoneLabel.textContent = `Zon 2 · ${draftPreviewZoneItem.title || kindLabel(draftPreviewZoneItem.kind)} · ${draftPreviewZonePosition + 1}/${draftPreviewZoneItemCount}`;
+    zone.append(zoneLabel);
+    if (draftPreviewZoneItem.kind === 'image' && /^https?:\/\//i.test(draftPreviewZoneItem.source_url || '')) {
+      const image = document.createElement('img');
+      image.src = draftPreviewZoneItem.source_url;
+      image.alt = draftPreviewZoneItem.title || 'Förhandsvisning av zonbild';
+      image.addEventListener('error', () => addPreviewMessage(zone, 'Webbläsaren kunde inte läsa zonbilden.'), { once: true });
+      zone.append(image);
+    } else if (draftPreviewZoneItem.kind === 'video' && /^https?:\/\//i.test(draftPreviewZoneItem.source_url || '')) {
+      const video = document.createElement('video');
+      video.src = draftPreviewZoneItem.source_url;
+      video.controls = true;
+      video.playsInline = true;
+      video.preload = 'metadata';
+      zone.append(video);
+    } else if (draftPreviewZoneItem.kind === 'web') {
+      const url = safePreviewUrl(draftPreviewZoneItem.source_url);
+      if (!url) addPreviewMessage(zone, 'Zonens webbadress är ogiltig.');
+      else {
+        const frame = document.createElement('iframe');
+        frame.className = 'draft-preview-zone-web';
+        frame.src = url.href;
+        frame.title = draftPreviewZoneItem.title || 'Webbinnehåll i zon';
+        frame.referrerPolicy = 'no-referrer';
+        frame.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-same-origin');
+        zone.append(frame);
+      }
+    } else if (draftPreviewZoneItem.kind === 'feed') {
+      addPreviewMessage(zone, 'Hämtar live-data till zonen…');
+      startDraftFeedPreview(draftPreviewZoneItem, zone, generation);
+    } else {
+      const copy = document.createElement('div');
+      copy.className = 'draft-preview-zone-copy';
+      if (draftPreviewZoneItem.kind === 'clock') {
+        copy.textContent = `${new Intl.DateTimeFormat('sv-SE', { timeStyle: 'short' }).format(draftPreviewAt)}\n${draftPreviewZoneItem.title || ''}`;
+      } else copy.textContent = draftPreviewZoneItem.body || draftPreviewZoneItem.title || '';
+      zone.append(copy);
+    }
+  } else {
+    zoneLabel.textContent = 'Zon 2 · Text';
+    zone.append(zoneLabel);
+    const copy = document.createElement('div');
+    copy.className = 'draft-preview-zone-copy';
+    copy.textContent = draftPreviewZoneText;
+    zone.append(copy);
+  }
+  composition.append(zone);
+  return composition;
 }
 
 function safePreviewUrl(value) {
@@ -2774,10 +2874,11 @@ function addPreviewMessage(frame, message, error = false) {
 }
 
 function startDraftFeedPreview(item, frame, generation) {
-  if (draftPreviewAbortController) return;
+  if (frame.dataset.feedPreviewLoading === 'true') return;
   const controller = new AbortController();
-  draftPreviewAbortController = controller;
-  loadDraftFeedPreview(item, frame, generation, controller.signal)
+  frame.dataset.feedPreviewLoading = 'true';
+  draftPreviewAbortControllers.add(controller);
+  loadDraftFeedPreview(item, frame, generation, controller.signal, controller)
     .catch(error => {
       if (generation !== draftPreviewGeneration) return;
       const status = frame.querySelector('[data-preview-live-status]') || addPreviewMessage(frame, '');
@@ -2785,11 +2886,12 @@ function startDraftFeedPreview(item, frame, generation) {
       status.textContent = error?.message || 'Kunde inte hämta live-data.';
     })
     .finally(() => {
-      if (draftPreviewAbortController === controller) draftPreviewAbortController = null;
+      draftPreviewAbortControllers.delete(controller);
+      frame.dataset.feedPreviewLoading = 'false';
     });
 }
 
-async function loadDraftFeedPreview(item, frame, generation, signal) {
+async function loadDraftFeedPreview(item, frame, generation, signal, controller) {
   let payload;
   let fetchedAt;
   if (item.integration_id) {
@@ -2814,7 +2916,7 @@ async function loadDraftFeedPreview(item, frame, generation, signal) {
     let timeout;
     try {
       timeout = setTimeout(() => {
-        if (generation === draftPreviewGeneration) draftPreviewAbortController?.abort();
+        if (generation === draftPreviewGeneration) controller.abort();
       }, 10_000);
       const response = await fetch(url.href, {
         cache: 'no-store',
@@ -2946,8 +3048,8 @@ $('#draftPreviewDialog').addEventListener('close', () => {
   draftPreviewGeneration++;
   clearInterval(draftPreviewRefreshTimer);
   draftPreviewRefreshTimer = null;
-  draftPreviewAbortController?.abort();
-  draftPreviewAbortController = null;
+  draftPreviewAbortControllers.forEach(controller => controller.abort());
+  draftPreviewAbortControllers.clear();
   $('[data-preview-stage]').replaceChildren();
 });
 
@@ -3149,7 +3251,13 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
         <div class="add-box"><h3>Webbsida eller live-dashboard</h3><form class="text-slide-form add-web"><input name="title" maxlength="80" placeholder="Namn på sidan" required /><input name="url" type="url" placeholder="https://…" required /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="60" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till sida</button></div>${scheduleFields()}</form></div>
       </div>
     </div>`;
-  card.querySelector('.preview-screen').addEventListener('click', () => openDraftPreview(screen, slides, channelSlides, assignedChannels));
+  card.querySelector('.preview-screen').addEventListener('click', () => openDraftPreview(
+    screen,
+    slides,
+    channelSlides,
+    assignedChannels,
+    playlistSlides.filter(item => item.playlist_id === screen.zone_playlist_id)
+  ));
   card.querySelector('.request-publish-screen').addEventListener('click', async event => {
     const button = event.currentTarget;
     button.disabled = true;
