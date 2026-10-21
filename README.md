@@ -29,7 +29,7 @@ Distribuera Edge Functions `report-screen-preview` och `invite-team-member` med 
 
 När Pages-workflowen är klar finns adminvyn på `https://<github-användare>.github.io/<repo>/`. Logga in med ett inbjudet admin-konto, skapa en skärm och använd den sex tecken långa parkopplingskoden i TV-appen. Koden går bara att använda en gång.
 
-Adminvyn är uppdelad i arbetsytor med en fast meny: Skärmöversikt, Mediabibliotek, Spellistor, Kanaler & schema, Utskick, Integrationer, Uppspelning samt adminytorna Grupper & platser, Team och Aktivitetslogg. Utskick har en separat mottagarlista där TV-apparater kan väljas direkt; äldre profiler för samma TV visas bara en gång.
+Adminvyn är uppdelad i arbetsytor med en fast meny: Skärmöversikt, Mediabibliotek, Spellistor, Kanaler & schema, Utskick, Integrationer, Uppspelning samt adminytorna Grupper & platser, Team och Aktivitetslogg. Utskick har en separat mottagarlista där TV-apparater kan väljas direkt eller hittas via namn, plats och skärmgrupp. Äldre profiler för samma TV visas bara en gång.
 
 ## Bygg och installera TV-appen
 

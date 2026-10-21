@@ -2469,21 +2469,47 @@ function updateBroadcastTargetCount() {
   const count = $('#broadcastTargetCount');
   if (!list || !count) return;
   const selected = list.querySelectorAll('input[name="broadcast_screen_id"]:checked').length;
-  count.textContent = `${selected} valda`;
+  const visible = [...list.querySelectorAll('.broadcast-target-option')].filter(label => !label.classList.contains('hidden')).length;
+  count.textContent = `${selected} valda · ${visible} av ${list.querySelectorAll('.broadcast-target-option').length} visas`;
+}
+
+function updateBroadcastTargetFilter() {
+  const list = $('#broadcastTargetList');
+  if (!list) return;
+  const query = ($('#broadcastTargetSearch')?.value || '').trim().toLocaleLowerCase('sv-SE');
+  const locationId = $('#broadcastTargetLocation')?.value || 'all';
+  const groupId = $('#broadcastTargetGroup')?.value || 'all';
+  list.querySelectorAll('.broadcast-target-option').forEach(label => {
+    const nameMatches = !query || label.dataset.screenName.includes(query);
+    const locationMatches = locationId === 'all' || label.dataset.locationId === locationId;
+    const groupMatches = groupId === 'all' || label.dataset.groupId === groupId;
+    label.classList.toggle('hidden', !(nameMatches && locationMatches && groupMatches));
+  });
+  updateBroadcastTargetCount();
 }
 
 function renderBroadcastTargets() {
   const list = $('#broadcastTargetList');
   if (!list) return;
+  const searchValue = $('#broadcastTargetSearch')?.value || '';
+  const locationValue = $('#broadcastTargetLocation')?.value || 'all';
+  const groupValue = $('#broadcastTargetGroup')?.value || 'all';
   const priorSelection = new Set([...list.querySelectorAll('input[name="broadcast_screen_id"]:checked')].map(input => input.value));
   const hasInitialized = list.dataset.initialized === 'true';
   const initialSelection = new Set(selectedLogicalScreens().map(screen => screen.id));
   const logical = logicalScreens();
+  const locationSelect = $('#broadcastTargetLocation');
+  const groupSelect = $('#broadcastTargetGroup');
+  locationSelect.innerHTML = `<option value="all">Alla platser</option>${locations.map(location => `<option value="${esc(location.id)}">${esc(location.name)}</option>`).join('')}<option value="unassigned">Ingen plats</option>`;
+  groupSelect.innerHTML = `<option value="all">Alla grupper</option>${screenGroups.map(group => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join('')}<option value="ungrouped">Ingen grupp</option>`;
+  if ([...locationSelect.options].some(option => option.value === locationValue)) locationSelect.value = locationValue;
+  if ([...groupSelect.options].some(option => option.value === groupValue)) groupSelect.value = groupValue;
+  $('#broadcastTargetSearch').value = searchValue;
   list.replaceChildren();
   if (!logical.length) {
     list.innerHTML = '<div class="broadcast-target-empty">Inga skärmar finns ännu.</div>';
     list.dataset.initialized = 'true';
-    updateBroadcastTargetCount();
+    updateBroadcastTargetFilter();
     return;
   }
   const groupNames = new Map(screenGroups.map(group => [group.id, group.name]));
@@ -2496,6 +2522,9 @@ function renderBroadcastTargets() {
     checkbox.checked = hasInitialized ? priorSelection.has(screen.id) : initialSelection.has(screen.id);
     const label = document.createElement('label');
     label.className = 'broadcast-target-option';
+    label.dataset.screenName = String(screen.name || '').toLocaleLowerCase('sv-SE');
+    label.dataset.locationId = screen.location_id || 'unassigned';
+    label.dataset.groupId = screen.group_id || 'ungrouped';
     label.append(checkbox);
     const copy = document.createElement('span');
     copy.className = 'broadcast-target-copy';
@@ -2513,14 +2542,18 @@ function renderBroadcastTargets() {
     list.append(label);
   });
   list.dataset.initialized = 'true';
-  updateBroadcastTargetCount();
+  updateBroadcastTargetFilter();
 }
 
 $('#screenBroadcastForm').addEventListener('click', event => {
   const button = event.target.closest('[data-broadcast-target-action]');
   if (!button) return;
   const checkboxes = [...$('#broadcastTargetList').querySelectorAll('input[name="broadcast_screen_id"]')];
-  if (button.dataset.broadcastTargetAction === 'all') checkboxes.forEach(input => { input.checked = true; });
+  if (button.dataset.broadcastTargetAction === 'all') {
+    checkboxes.forEach(input => {
+      if (!input.closest('.broadcast-target-option').classList.contains('hidden')) input.checked = true;
+    });
+  }
   if (button.dataset.broadcastTargetAction === 'none') checkboxes.forEach(input => { input.checked = false; });
   if (button.dataset.broadcastTargetAction === 'selected') {
     const selectedIds = new Set(selectedLogicalScreens().map(screen => screen.id));
@@ -2529,7 +2562,11 @@ $('#screenBroadcastForm').addEventListener('click', event => {
   updateBroadcastTargetCount();
 });
 $('#screenBroadcastForm').addEventListener('change', event => {
+  if (event.target.matches('#broadcastTargetLocation, #broadcastTargetGroup')) updateBroadcastTargetFilter();
   if (event.target.matches('input[name="broadcast_screen_id"]')) updateBroadcastTargetCount();
+});
+$('#screenBroadcastForm').addEventListener('input', event => {
+  if (event.target.matches('#broadcastTargetSearch')) updateBroadcastTargetFilter();
 });
 
 document.addEventListener('click', event => {
@@ -2597,7 +2634,7 @@ async function sendScreenBroadcast(event) {
     form.elements.duration.value = '10';
     form.elements.duration_seconds.value = '60';
     updateBroadcastTextRequirement();
-    updateBroadcastTargetCount();
+    updateBroadcastTargetFilter();
     $('#screenBroadcastComposer').open = false;
     toast(scheduled
       ? `Utskicket är planerat till ${startAt.toLocaleString('sv-SE')} på ${active.length} skärmar.`
