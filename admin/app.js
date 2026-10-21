@@ -2283,6 +2283,14 @@ function renderScreenDirectory() {
   const devices = logicalScreens();
   const cardsMarkup = devices.map(screen => {
     const online = isOnline(screen);
+    const publication = screenRenderData.get(screen.id)?.[6] || null;
+    const publishedRevision = Number(publication?.revision || 0);
+    const appliedRevision = screen.applied_revision == null ? null : Number(screen.applied_revision);
+    const deliveryState = !publication ? 'unpublished'
+      : appliedRevision == null || appliedRevision < publishedRevision ? 'pending' : 'synced';
+    const deliveryLabel = !publication ? 'Ej publicerad'
+      : deliveryState === 'pending' ? (appliedRevision == null ? `Väntar på kvittens för v${publishedRevision}` : `Väntar på v${publishedRevision} · TV v${appliedRevision}`)
+      : `Synkad v${appliedRevision}`;
     const group = screenGroups.find(item => item.id === screen.group_id)?.name;
     const location = locations.find(item => item.id === screen.location_id)?.name;
     const current = online ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt';
@@ -2290,11 +2298,11 @@ function renderScreenDirectory() {
     const selected = screenProfileIds(screen.id).some(id => selectedScreenIds.has(id));
     const duplicateCount = screenProfileGroups().find(entries => entries.some(item => item.id === screen.id))?.length || 1;
     const sameNameCount = screens.filter(item => screenNameKey(item) === screenNameKey(screen)).length;
-    return `<article class="screen-directory-card" data-screen-id="${esc(screen.id)}" data-screen-name="${esc(screen.name || '')}" data-screen-current="${esc(screen.current_title || '')}" data-screen-status="${online ? 'online' : screen.pair_code ? 'pairing' : 'offline'}" data-screen-group="${esc(screen.group_id || '')}" data-screen-location="${esc(screen.location_id || '')}">
+    return `<article class="screen-directory-card" data-screen-id="${esc(screen.id)}" data-screen-name="${esc(screen.name || '')}" data-screen-current="${esc(screen.current_title || '')}" data-screen-status="${online ? 'online' : screen.pair_code ? 'pairing' : 'offline'}" data-screen-publish="${deliveryState}" data-screen-group="${esc(screen.group_id || '')}" data-screen-location="${esc(screen.location_id || '')}">
       <label class="screen-directory-select"><input class="screen-directory-checkbox" type="checkbox" ${selected ? 'checked' : ''} ${['admin', 'editor'].includes(currentRole) ? '' : 'disabled'} aria-label="Välj ${esc(screen.name)}" /></label>
       <button class="screen-directory-open" type="button" data-open-screen="${esc(screen.id)}" aria-label="Öppna inställningar för ${esc(screen.name)}">
         <span class="screen-directory-icon">▣</span><span class="screen-directory-main"><strong>${esc(screen.name || 'Namnlös skärm')}</strong><small>${esc([location, group].filter(Boolean).join(' · ') || 'Ingen plats eller grupp')}${duplicateCount > 1 ? ` · ${duplicateCount - 1} profil${duplicateCount > 2 ? 'er' : ''} med samma TV-ID dolda` : ''}${sameNameCount > 1 ? ` · ${sameNameCount} profiler med samma namn` : ''}</small></span>
-        <span class="screen-directory-now"><small>VISAS JUST NU</small><strong>${esc(current)}</strong><small>${esc(currentKind)}</small></span>
+        <span class="screen-directory-now"><small>VISAS JUST NU</small><strong>${esc(current)}</strong><small>${esc(currentKind)}</small><small class="screen-directory-delivery ${deliveryState}">PUBLICERING · ${esc(deliveryLabel)}</small></span>
         <span class="screen-directory-status ${online ? 'online' : 'offline'}"><i></i>${online ? 'Online' : screen.pair_code ? 'Parkoppling' : 'Offline'}</span><span class="screen-directory-arrow">→</span>
       </button>
     </article>`;
@@ -2323,6 +2331,7 @@ screenDirectoryList.addEventListener('click', event => {
 
 $('#screenSearch').addEventListener('input', applyScreenFilters);
 $('#screenFilter').addEventListener('change', applyScreenFilters);
+$('#publicationFilter').addEventListener('change', applyScreenFilters);
 $('#locationFilter').addEventListener('change', applyScreenFilters);
 $('#groupFilter').addEventListener('change', applyScreenFilters);
 $('#selectVisibleScreens').addEventListener('click', () => {
@@ -2358,6 +2367,7 @@ $('#assignSelectedLocation').addEventListener('click', assignSelectedScreensToLo
 function applyScreenFilters() {
   const query = $('#screenSearch').value.trim().toLocaleLowerCase('sv-SE');
   const filter = $('#screenFilter').value;
+  const publicationFilter = $('#publicationFilter').value;
   const selectedLocation = $('#locationFilter').value;
   const selectedGroup = $('#groupFilter').value;
   const visible = [];
@@ -2368,13 +2378,15 @@ function applyScreenFilters() {
       || (filter === 'online' && screen && isOnline(screen))
       || (filter === 'offline' && screen && !isOnline(screen))
       || (filter === 'pairing' && Boolean(screen?.pair_code));
+    const matchesPublication = publicationFilter === 'all'
+      || card.dataset.screenPublish === publicationFilter;
     const matchesGroup = selectedGroup === 'all'
       || (selectedGroup === 'ungrouped' && !screen?.group_id)
       || (screen?.group_id === selectedGroup);
     const matchesLocation = selectedLocation === 'all'
       || (selectedLocation === 'unassigned' && !screen?.location_id)
       || screen?.location_id === selectedLocation;
-    const show = matchesName && matchesStatus && matchesGroup && matchesLocation;
+    const show = matchesName && matchesStatus && matchesPublication && matchesGroup && matchesLocation;
     card.classList.toggle('hidden', !show);
     if (show) visible.push(card);
   });

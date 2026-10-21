@@ -84,6 +84,7 @@
 .screen-directory-main strong,.screen-directory-now strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
 .screen-directory-main small,.screen-directory-now small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:9px}
 .screen-directory-now>small:first-child{color:#77849a;font:8px 'DM Mono',monospace;letter-spacing:.09em}
+.screen-tools #publicationFilter{width:175px}.screen-directory-delivery{font:8px 'DM Mono',monospace;letter-spacing:.01em}.screen-directory-delivery.pending{color:#ffd08f}.screen-directory-delivery.synced{color:#9be875}.screen-directory-delivery.unpublished{color:#8792a4}
 .screen-directory-status{display:flex;align-items:center;gap:7px;font-size:10px;color:#ff9aa0}
 .screen-directory-status i{width:7px;height:7px;border-radius:50%;background:#ff8189;box-shadow:0 0 9px #ff818955}
 .screen-directory-status.online{color:#9be875}
