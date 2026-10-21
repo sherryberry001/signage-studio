@@ -19,16 +19,20 @@ let channelSchedules = [];
 let teamMembers = [];
 let screenCommands = [];
 let mediaLibrary = [];
+let activityLog = [];
 let currentRole = null;
 let statusTimer = null;
+let activityTimer = null;
 let screensLoadId = 0;
+let activityLoadId = 0;
 const selectedScreenIds = new Set();
 let activeWorkspace = 'screens';
 const workspaceDetails = {
   screens: ['Skärmar', 'Övervaka anslutning, innehåll och status för dina skärmar.'],
   content: ['Innehåll', 'Hantera återanvändbara spellistor och innehållsbiblioteket.'],
   channels: ['Kanaler', 'Planera vad som ska visas, när det ska visas och på vilka skärmar.'],
-  team: ['Team', 'Hantera personer och åtkomst till Signage Studio.']
+  team: ['Team', 'Hantera personer och åtkomst till Signage Studio.'],
+  activity: ['Aktivitet', 'Följ ändringar och fjärråtgärder i Signage Studio.']
 };
 
 $('#year').textContent = new Date().getFullYear();
@@ -41,6 +45,9 @@ $('#workspaceNavigation').addEventListener('click', event => {
 function setWorkspace(workspace) {
   if (!workspaceDetails[workspace]) return;
   if (workspace === 'team' && currentRole !== 'admin') return;
+  if (workspace === 'activity' && currentRole !== 'admin') return;
+  clearInterval(activityTimer);
+  activityTimer = null;
   activeWorkspace = workspace;
   document.querySelectorAll('[data-workspace-panel]').forEach(panel => {
     panel.classList.toggle('hidden', panel.dataset.workspacePanel !== workspace);
@@ -53,6 +60,10 @@ function setWorkspace(workspace) {
   });
   $('#workspaceTitle').textContent = workspaceDetails[workspace][0];
   $('#workspaceDescription').textContent = workspaceDetails[workspace][1];
+  if (workspace === 'activity') {
+    loadActivityLog();
+    activityTimer = setInterval(loadActivityLog, 15000);
+  }
 }
 
 setWorkspace('screens');
@@ -107,12 +118,15 @@ function setSession(user) {
     teamMembers = [];
     screenCommands = [];
     mediaLibrary = [];
+    activityLog = [];
     selectedScreenIds.clear();
     currentRole = null;
     activeWorkspace = 'screens';
     setWorkspace('screens');
     screenList.replaceChildren();
     clearInterval(statusTimer);
+    clearInterval(activityTimer);
+    activityTimer = null;
   }
 }
 
@@ -300,6 +314,9 @@ $('#channelManagementList').addEventListener('click', async event => {
 });
 
 $('#mediaSearch').addEventListener('input', renderMediaLibrary);
+$('#activitySearch').addEventListener('input', renderActivityLog);
+$('#activityFilter').addEventListener('change', renderActivityLog);
+$('#refreshActivity').addEventListener('click', loadActivityLog);
 
 $('#mediaLibraryForm [name="kind"]').addEventListener('change', event => {
   $('#mediaLibraryForm .feed-refresh-setting').classList.toggle('hidden', event.target.value !== 'feed');
@@ -489,9 +506,10 @@ function updateRoleVisibility() {
   document.querySelectorAll('.admin-only').forEach(control => control.classList.toggle('hidden', !admin));
   document.querySelectorAll('.workspace-tab').forEach(button => {
     button.classList.toggle('hidden', (button.dataset.workspace === 'team' && !admin)
+      || (button.dataset.workspace === 'activity' && !admin)
       || (button.dataset.workspace !== 'screens' && !currentRole));
   });
-  if (!currentRole || (activeWorkspace === 'team' && !admin)) setWorkspace('screens');
+  if (!currentRole || (['team', 'activity'].includes(activeWorkspace) && !admin)) setWorkspace('screens');
 }
 
 function updateChannelControls() {
@@ -679,6 +697,74 @@ function renderTeamMembers() {
     if (error) return toast(error.message, true);
     toast('Teammedlemmen togs bort.'); await loadScreens();
   }));
+}
+
+const activityEntityGroups = {
+  team: new Set(['team_members', 'screen_group_members']),
+  channels: new Set(['channels', 'channel_playlists', 'screen_channel_schedules'])
+};
+const activityEntityLabels = {
+  screens: 'Skärm', slides: 'Innehåll', playlists: 'Spellista', media_library: 'Biblioteksinnehåll',
+  channels: 'Kanal', channel_playlists: 'Kanalspellista', screen_channel_schedules: 'Kanalschema',
+  screen_groups: 'Skärmgrupp', screen_group_members: 'Gruppåtkomst', team_members: 'Teamroll',
+  screen_commands: 'Spelarkommando'
+};
+const activityActionLabels = { INSERT: 'skapades', UPDATE: 'uppdaterades', DELETE: 'togs bort' };
+const activityFieldLabels = {
+  name: 'namn', title: 'rubrik', body: 'text', source_url: 'källa', duration_seconds: 'visningstid',
+  refresh_interval_seconds: 'uppdateringsintervall', sort_order: 'ordning', is_active: 'aktiv status',
+  playlist_id: 'spellista', screen_id: 'skärm', group_id: 'grupp', user_id: 'medlem', role: 'roll',
+  priority: 'prioritet', active_from: 'starttid', active_until: 'sluttid', weekdays: 'veckodagar',
+  daily_start_time: 'daglig start', daily_end_time: 'dagligt slut', tags: 'taggar', command: 'kommando',
+  forced_slide_id: 'tvingat innehåll', layout_type: 'layout', layout_text: 'layouttext',
+  operating_start_time: 'öppettid', operating_end_time: 'stängningstid', playback_mode: 'uppspelningsläge',
+  autostart_enabled: 'autostart', description: 'beskrivning', email: 'e-post'
+};
+
+function activityMatchesGroup(item, group) {
+  if (group === 'all') return true;
+  if (group === 'team' || group === 'channels') return activityEntityGroups[group].has(item.entity_type);
+  if (group === 'screens') return ['screens', 'screen_groups'].includes(item.entity_type);
+  if (group === 'slides') return ['slides', 'media_library'].includes(item.entity_type);
+  if (group === 'playlists') return item.entity_type === 'playlists';
+  return item.entity_type === group;
+}
+
+function renderActivityLog() {
+  const list = $('#activityList');
+  if (!list) return;
+  const query = ($('#activitySearch')?.value || '').trim().toLocaleLowerCase('sv-SE');
+  const group = $('#activityFilter')?.value || 'all';
+  const rows = activityLog.filter(item => activityMatchesGroup(item, group)
+    && (!query || `${item.actor_email} ${item.entity_label} ${item.entity_type} ${(item.changed_fields || []).join(' ')}`.toLocaleLowerCase('sv-SE').includes(query)));
+  if (!activityLog.length) {
+    list.innerHTML = '<div class="activity-empty">Inga registrerade händelser ännu. Nya ändringar visas här automatiskt.</div>';
+    return;
+  }
+  if (!rows.length) {
+    list.innerHTML = '<div class="activity-empty">Inget matchar filtret.</div>';
+    return;
+  }
+  const date = value => new Intl.DateTimeFormat('sv-SE', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
+  list.innerHTML = `<div class="activity-table" role="table" aria-label="Senaste organisationsaktiviteten"><div class="activity-table-head" role="row"><span>Tid</span><span>Person</span><span>Händelse</span><span>Ändrade fält</span></div>${rows.map(item => {
+    const entity = activityEntityLabels[item.entity_type] || item.entity_type;
+    const action = activityActionLabels[item.action] || item.action;
+    const fields = (item.changed_fields || []).map(field => activityFieldLabels[field] || field.replaceAll('_', ' '));
+    const detail = fields.length ? fields.join(', ') : item.action === 'INSERT' ? 'Ny post' : item.action === 'DELETE' ? 'Post borttagen' : '—';
+    return `<div class="activity-row" role="row"><time datetime="${esc(item.created_at)}">${esc(date(item.created_at))}</time><span>${esc(item.actor_email || 'System/automatiserat')}</span><span><strong>${esc(entity)} ${esc(action)}</strong><small>${esc(item.entity_label)}</small></span><span>${esc(detail)}</span></div>`;
+  }).join('')}</div>`;
+}
+
+async function loadActivityLog() {
+  if (currentRole !== 'admin') return;
+  const requestId = ++activityLoadId;
+  const { data, error } = await supabase.from('activity_log')
+    .select('id,actor_email,action,entity_type,entity_label,changed_fields,created_at')
+    .order('created_at', { ascending: false }).order('id', { ascending: false }).limit(100);
+  if (requestId !== activityLoadId || currentRole !== 'admin') return;
+  if (error) return toast(error.message, true);
+  activityLog = data || [];
+  renderActivityLog();
 }
 
 function isOnline(screen) {
