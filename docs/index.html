@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261110-remote-preview" />
-    <script type="module" src="./app.js?v=20261110-remote-preview"></script>
+    <link rel="stylesheet" href="./style.css?v=20261111-team-invites" />
+    <script type="module" src="./app.js?v=20261111-team-invites"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -88,8 +88,8 @@
           <div id="mediaLibraryList" class="media-library-list"></div>
         </section>
         <section id="teamPanel" class="team-panel hidden" data-workspace-panel="team">
-          <div class="team-heading"><div><strong>Teamåtkomst</strong><span>Bjud först in personen i Supabase Auth. Välj Gruppmedlem för åtkomst endast till skärmgrupper du tilldelar här ovan.</span></div></div>
-          <form id="teamRoleForm" class="team-role-form"><input id="teamEmail" type="email" placeholder="namn@foretag.se" required /><select id="teamRole"><option value="editor">Redaktör · alla skärmar</option><option value="viewer">Läsbehörig · alla skärmar</option><option value="group_member">Gruppmedlem · valda grupper</option><option value="admin">Admin</option></select><button class="button primary" type="submit">Tilldela roll</button></form>
+          <div class="team-heading"><div><strong>Teamåtkomst</strong><span>Bjud in via e-post och välj behörighet direkt. Gruppmedlem får endast åtkomst till skärmgrupper som du tilldelar här.</span></div></div>
+          <form id="teamRoleForm" class="team-role-form"><input id="teamEmail" type="email" placeholder="namn@foretag.se" required /><select id="teamRole"><option value="editor">Redaktör · alla skärmar</option><option value="viewer">Läsbehörig · alla skärmar</option><option value="group_member">Gruppmedlem · valda grupper</option><option value="admin">Admin</option></select><button class="button primary" type="submit">Bjud in och tilldela</button></form>
           <div id="teamList" class="team-list"></div>
         </section>
         <section id="activityPanel" class="activity-panel hidden" data-workspace-panel="activity">

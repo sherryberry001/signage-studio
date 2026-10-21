@@ -282,11 +282,23 @@ $('#screenGroupList').addEventListener('click', async event => {
 $('#teamRoleForm').addEventListener('submit', async event => {
   event.preventDefault();
   if (currentRole !== 'admin') return;
-  const { error } = await supabase.rpc('set_team_member', { input_email: $('#teamEmail').value.trim(), input_role: $('#teamRole').value });
-  if (error) return toast(error.message, true);
+  const submit = event.currentTarget.querySelector('[type="submit"]');
+  submit.disabled = true;
+  const { data, error } = await supabase.functions.invoke('invite-team-member', {
+    body: { email: $('#teamEmail').value.trim(), role: $('#teamRole').value }
+  });
+  if (error) {
+    let message = error.message;
+    try {
+      const details = await error.context?.json();
+      if (details?.error) message = details.error;
+    } catch { }
+    submit.disabled = false;
+    return toast(message, true);
+  }
   event.currentTarget.reset();
-  toast('Teamrollen uppdaterades.');
-  await loadScreens();
+  toast(data?.invited ? `Inbjudan skickad till ${data.email}.` : `${data?.email || 'Kontot'} hade redan Auth och har lagts till i teamet.`);
+  try { await loadScreens(); } finally { submit.disabled = false; }
 });
 
 $('#createPlaylistForm').addEventListener('submit', async event => {
