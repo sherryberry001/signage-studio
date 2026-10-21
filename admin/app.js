@@ -1383,6 +1383,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     <div class="screen-status-row"><div class="screen-live-status ${isOnline(screen) ? 'online' : 'offline'}"><span class="status-indicator"></span><span class="status-label">${isOnline(screen) ? 'Online nu' : 'Offline'}</span><span class="last-seen">${screen.last_seen_at ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Spelaren har inte rapporterat ännu'}</span></div><div class="current-content ${isOnline(screen) ? '' : 'stale'}"><span class="current-content-label">VISAS JUST NU</span><strong class="current-title">${esc(isOnline(screen) ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt')}</strong><span class="current-kind">${esc(isOnline(screen) ? kindLabel(screen.current_kind) : 'Skärmen är offline')}</span><div class="current-preview"></div></div><div class="device-diagnostics">${renderDeviceDiagnostics(screen)}</div></div>
     <div class="screen-body">
       <p class="pair-help">${screen.pair_code ? 'Öppna Signage Player på TV:n och skriv koden ovan. Koden kan bara användas en gång.' : 'TV:n är parkopplad. Nytt innehåll synkas automatiskt och sparas lokalt för offlinevisning.'}</p>
+      <details class="screen-health-history"><summary>Drifthistorik</summary><div class="screen-health-events" data-screen-health-events>Öppna för att läsa skärmens senaste online- och offlinehändelser.</div></details>
       <label class="screen-group-assignment ${canAdmin ? '' : 'hidden'}">Skärmgrupp<select class="screen-group-select">${screenGroupOptions(screen.group_id || '')}</select><span>Använd grupper för att sortera skärmar efter plats eller team.</span></label>
       <form class="screen-operating-form ${canAdmin ? '' : 'hidden'}"><div class="operating-heading"><strong>Öppettider</strong><span>TV:n visar svart utanför tiderna men fortsätter vara ansluten. Tider följer TV:ns lokala klocka.</span></div><div class="operating-days">${operatingDays.map(([day, label]) => `<label><input type="checkbox" name="operating_weekdays" value="${day}" ${selectedOperatingDays.includes(day) ? 'checked' : ''} /><span>${label}</span></label>`).join('')}</div><div class="operating-times"><label>Från<input name="operating_start_time" type="time" value="${esc(screen.operating_start_time || '')}" /></label><label>Till<input name="operating_end_time" type="time" value="${esc(screen.operating_end_time || '')}" /></label></div><button class="button ghost small" type="submit">Spara öppettider</button></form>
       <label class="screen-playback-setting ${canAdmin ? '' : 'hidden'}">Uppspelningsläge<select class="screen-playback-mode"><option value="independent" ${screen.playback_mode !== 'sync' ? 'selected' : ''}>Fristående · starta lokalt</option><option value="sync" ${screen.playback_mode === 'sync' ? 'selected' : ''}>Synkad · gemensam tidslinje</option></select><span>Synka skärmar med samma aktiva innehållssekvens och schema. TV-enheterna behöver rätt klocka.</span></label>
@@ -1414,6 +1415,34 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     await loadScreens();
   });
   updateCurrentPreview(card.querySelector('.current-preview'), screen, isOnline(screen));
+  const healthHistory = card.querySelector('.screen-health-history');
+  healthHistory.addEventListener('toggle', async () => {
+    if (!healthHistory.open || healthHistory.dataset.loading === 'true') return;
+    healthHistory.dataset.loading = 'true';
+    healthHistory.dataset.loaded = 'loading';
+    const container = healthHistory.querySelector('[data-screen-health-events]');
+    container.textContent = 'Hämtar drifthistorik …';
+    const { data, error } = await supabase.from('screen_health_events')
+      .select('status,observed_at,last_seen_at')
+      .eq('screen_id', screen.id)
+      .order('observed_at', { ascending: false })
+      .limit(50);
+    if (error) {
+      container.textContent = `Kunde inte läsa historiken: ${error.message}`;
+      delete healthHistory.dataset.loading;
+      return;
+    }
+    if (!data?.length) {
+      container.textContent = 'Ingen historik ännu. Händelser visas efter att spelarens första status har registrerats.';
+      delete healthHistory.dataset.loading;
+      return;
+    }
+    const formatEventTime = value => value
+      ? new Intl.DateTimeFormat('sv-SE', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+      : 'Okänd tid';
+    container.innerHTML = data.map(event => `<article class="screen-health-event"><span class="health-event-mark ${event.status === 'online' ? 'online' : 'offline'}"></span><div><strong>${event.status === 'online' ? 'Spelaren upptäcktes online' : 'Spelaren upptäcktes offline'}</strong><time>${esc(formatEventTime(event.observed_at))}</time>${event.status === 'offline' ? `<small>Senaste heartbeat: ${esc(formatEventTime(event.last_seen_at))}</small>` : ''}</div></article>`).join('');
+    delete healthHistory.dataset.loading;
+  });
 
   card.querySelector('.toggle-screen').addEventListener('click', async () => {
     const { error } = await supabase.from('screens').update({ is_active: !screen.is_active }).eq('id', screen.id);
