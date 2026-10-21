@@ -27,6 +27,7 @@ let currentRole = null;
 let statusTimer = null;
 let activityTimer = null;
 let integrationTimer = null;
+let channelCalendarOffset = 0;
 let screensLoadId = 0;
 let activityLoadId = 0;
 const selectedScreenIds = new Set();
@@ -349,6 +350,10 @@ $('#exportPlayback').addEventListener('click', exportPlaybackEvents);
 $('#refreshIntegrations').addEventListener('click', loadIntegrationStatus);
 $('#integrationSearch').addEventListener('input', renderIntegrationStatus);
 $('#integrationFilter').addEventListener('change', renderIntegrationStatus);
+$('#channelCalendarPrevious').addEventListener('click', () => { channelCalendarOffset--; renderChannelCalendar(); });
+$('#channelCalendarToday').addEventListener('click', () => { channelCalendarOffset = 0; renderChannelCalendar(); });
+$('#channelCalendarNext').addEventListener('click', () => { channelCalendarOffset++; renderChannelCalendar(); });
+$('#channelCalendarScreen').addEventListener('change', renderChannelCalendar);
 $('#createIntegration').addEventListener('click', () => openIntegrationForm());
 $('#cancelIntegration').addEventListener('click', resetIntegrationForm);
 $('#integrationCatalogList').addEventListener('click', event => {
@@ -639,6 +644,65 @@ function updateChannelManagement() {
     return card;
   }));
   if (!channels.length) container.innerHTML = '<div class="slide-sub">Skapa en kanal och välj dess första spellista ovan.</div>';
+  renderChannelCalendar();
+}
+
+function weekStartFor(date) {
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  return start;
+}
+
+function calendarDateLabel(date, options = { day: 'numeric', month: 'short' }) {
+  return new Intl.DateTimeFormat('sv-SE', options).format(date);
+}
+
+function updateChannelCalendarScreens() {
+  const select = $('#channelCalendarScreen');
+  if (!select) return;
+  const selected = select.value || 'all';
+  select.innerHTML = `<option value="all">Alla skärmar</option>${screens.map(screen => `<option value="${esc(screen.id)}">${esc(screen.name)}${screenGroups.find(group => group.id === screen.group_id) ? ` · ${esc(screenGroups.find(group => group.id === screen.group_id).name)}` : ''}</option>`).join('')}`;
+  select.value = screens.some(screen => screen.id === selected) ? selected : 'all';
+}
+
+function renderChannelCalendar() {
+  const grid = $('#channelCalendarGrid');
+  const range = $('#channelCalendarRange');
+  if (!grid || !range) return;
+  updateChannelCalendarScreens();
+  const start = weekStartFor(new Date());
+  start.setDate(start.getDate() + channelCalendarOffset * 7);
+  const days = Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(start);
+    day.setDate(start.getDate() + index);
+    return day;
+  });
+  const end = days[6];
+  const rangeOptions = { day: 'numeric', month: 'long' };
+  range.textContent = `${calendarDateLabel(days[0], rangeOptions)} – ${calendarDateLabel(end, rangeOptions)} ${end.getFullYear()}`;
+  const selectedScreen = $('#channelCalendarScreen').value;
+  const visibleSchedules = channelSchedules.filter(schedule => selectedScreen === 'all' || schedule.screen_id === selectedScreen);
+  grid.innerHTML = days.map(day => {
+    const weekday = ((day.getDay() + 6) % 7) + 1;
+    const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate());
+    const dayEnd = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 59, 59, 999);
+    const entries = visibleSchedules.filter(schedule => {
+      if (Array.isArray(schedule.weekdays) && schedule.weekdays.length && !schedule.weekdays.map(Number).includes(weekday)) return false;
+      if (schedule.active_from && new Date(schedule.active_from) > dayEnd) return false;
+      if (schedule.active_until && new Date(schedule.active_until) < dayStart) return false;
+      return true;
+    }).sort((a, b) => String(a.daily_start_time || '').localeCompare(String(b.daily_start_time || '')) || Number(a.priority) - Number(b.priority));
+    const items = entries.map(schedule => {
+      const screen = screens.find(item => item.id === schedule.screen_id);
+      const channel = channels.find(item => item.id === schedule.channel_id);
+      if (!screen || !channel) return '';
+      const time = schedule.daily_start_time && schedule.daily_end_time
+        ? `${String(schedule.daily_start_time).slice(0, 5)}–${String(schedule.daily_end_time).slice(0, 5)}`
+        : 'Hela dagen';
+      return `<article class="channel-calendar-event"><strong>${esc(channel.name)}</strong><span>${esc(screen.name)}</span><small>${esc(time)} · prio ${Number(schedule.priority)}</small>${schedule.active_from || schedule.active_until ? `<small>${schedule.active_from ? calendarDateLabel(new Date(schedule.active_from)) : 'Start utan gräns'} – ${schedule.active_until ? calendarDateLabel(new Date(schedule.active_until)) : 'utan slut'}</small>` : ''}</article>`;
+    }).join('');
+    return `<section class="channel-calendar-day ${day.toDateString() === new Date().toDateString() ? 'today' : ''}"><header><strong>${calendarDateLabel(day, { weekday: 'short' })}</strong><span>${calendarDateLabel(day, { day: 'numeric', month: 'short' })}</span></header><div class="channel-calendar-events">${items || '<span class="channel-calendar-empty">Inget kanalschema</span>'}</div></section>`;
+  }).join('');
 }
 
 function renderPlaylistLibrary() {
