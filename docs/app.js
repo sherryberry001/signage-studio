@@ -982,7 +982,7 @@ async function queueBulkPlayerCommand(command, button) {
 async function refreshScreenStatus() {
   if (!currentUser) return;
   const [{ data, error }, { data: commandData, error: commandError }] = await Promise.all([
-    supabase.from('screens').select('id,last_seen_at,preview_updated_at,current_title,current_body,current_kind,current_source_url,current_slide_id,forced_slide_id'),
+    supabase.from('screens').select('id,last_seen_at,preview_updated_at,current_title,current_body,current_kind,current_source_url,current_slide_id,forced_slide_id,player_version,device_model,android_version,display_size,network_type,device_updated_at'),
     supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100)
   ]);
   if (error || commandError) return;
@@ -1025,6 +1025,8 @@ async function refreshScreenStatus() {
       current.classList.toggle('stale', !online);
       updateCurrentPreview(current.querySelector('.current-preview'), screen, online);
     }
+    const diagnostics = card.querySelector('.device-diagnostics');
+    if (diagnostics) diagnostics.innerHTML = renderDeviceDiagnostics(screen);
     const forceButton = card.querySelector('.return-playlist');
     if (forceButton) forceButton.classList.toggle('hidden', !screen.forced_slide_id);
     const commandStatus = card.querySelector('[data-command-status]');
@@ -1077,6 +1079,13 @@ function updateCurrentPreview(container, screen, online) {
     return;
   }
   renderContentPreview(container, screen);
+}
+
+function renderDeviceDiagnostics(screen) {
+  if (!screen.device_updated_at) return '<strong>Enhetsdiagnostik</strong><span>Väntar på att spelaren rapporterar enhetsinfo.</span>';
+  const reported = new Date(screen.device_updated_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+  const details = [screen.device_model, screen.android_version ? `Android ${screen.android_version}` : '', screen.display_size, screen.network_type].filter(Boolean).map(esc).join(' · ');
+  return `<strong>${esc(screen.player_version ? `Spelare v${screen.player_version}` : 'Spelarversion okänd')}</strong><span>${details || 'Enhetsinformation saknas'}</span><small>Rapporterad ${esc(reported)}</small>`;
 }
 
 function renderContentPreview(container, screen) {
@@ -1132,7 +1141,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
       <div class="screen-title-wrap"><input class="screen-select ${canEdit ? '' : 'hidden'}" type="checkbox" ${selectedScreenIds.has(screen.id) ? 'checked' : ''} aria-label="Välj ${esc(screen.name)}" /><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${esc(screenGroup?.name || 'Ingen grupp')} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · möjlig dubblett (${sameNameCount} med samma namn)` : ''}</div></div></div>
       <div class="screen-actions">${pending}<button class="button ghost small renew-pairing ${canAdmin ? '' : 'hidden'}">Ny kod</button><button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
     </div>
-    <div class="screen-status-row"><div class="screen-live-status ${isOnline(screen) ? 'online' : 'offline'}"><span class="status-indicator"></span><span class="status-label">${isOnline(screen) ? 'Online nu' : 'Offline'}</span><span class="last-seen">${screen.last_seen_at ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Spelaren har inte rapporterat ännu'}</span></div><div class="current-content ${isOnline(screen) ? '' : 'stale'}"><span class="current-content-label">VISAS JUST NU</span><strong class="current-title">${esc(isOnline(screen) ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt')}</strong><span class="current-kind">${esc(isOnline(screen) ? kindLabel(screen.current_kind) : 'Skärmen är offline')}</span><div class="current-preview"></div></div></div>
+    <div class="screen-status-row"><div class="screen-live-status ${isOnline(screen) ? 'online' : 'offline'}"><span class="status-indicator"></span><span class="status-label">${isOnline(screen) ? 'Online nu' : 'Offline'}</span><span class="last-seen">${screen.last_seen_at ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Spelaren har inte rapporterat ännu'}</span></div><div class="current-content ${isOnline(screen) ? '' : 'stale'}"><span class="current-content-label">VISAS JUST NU</span><strong class="current-title">${esc(isOnline(screen) ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt')}</strong><span class="current-kind">${esc(isOnline(screen) ? kindLabel(screen.current_kind) : 'Skärmen är offline')}</span><div class="current-preview"></div></div><div class="device-diagnostics">${renderDeviceDiagnostics(screen)}</div></div>
     <div class="screen-body">
       <p class="pair-help">${screen.pair_code ? 'Öppna Signage Player på TV:n och skriv koden ovan. Koden kan bara användas en gång.' : 'TV:n är parkopplad. Nytt innehåll synkas automatiskt och sparas lokalt för offlinevisning.'}</p>
       <label class="screen-group-assignment ${canAdmin ? '' : 'hidden'}">Skärmgrupp<select class="screen-group-select">${screenGroupOptions(screen.group_id || '')}</select><span>Använd grupper för att sortera skärmar efter plats eller team.</span></label>

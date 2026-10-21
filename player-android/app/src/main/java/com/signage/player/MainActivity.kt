@@ -5,7 +5,10 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -65,6 +68,7 @@ class MainActivity : Activity() {
     private var heartbeatTask: Runnable? = null
     private var scheduleTask: Runnable? = null
     private var previewTask: Runnable? = null
+    private var deviceReportTask: Runnable? = null
     private var previewUploadRunning = false
     private var zoneAdvanceTask: Runnable? = null
     private var zoneClockTask: Runnable? = null
@@ -162,6 +166,14 @@ class MainActivity : Activity() {
         else if (outsideOperatingHours) showOperatingHoursScreen()
         else showMessage("Ansluter till Signage Studio …", "Senast publicerade innehåll visas när det går att synka.")
         syncPlaylist()
+        deviceReportTask?.let(handler::removeCallbacks)
+        deviceReportTask = object : Runnable {
+            override fun run() {
+                reportDeviceInfo()
+                handler.postDelayed(this, 5 * 60_000L)
+            }
+        }
+        handler.postDelayed(deviceReportTask!!, 5_000)
         refreshTask?.let(handler::removeCallbacks)
         refreshTask = object : Runnable {
             override fun run() {
@@ -707,6 +719,36 @@ class MainActivity : Activity() {
                     .put("input_current_source_url", source ?: JSONObject.NULL)
                 apiRequest("${baseUrl()}/rest/v1/rpc/player_heartbeat", "POST", body.toString())
             } catch (_: Exception) { }
+        }
+    }
+
+    private fun reportDeviceInfo() {
+        val id = screenId ?: return
+        val display = resources.displayMetrics.let { "${it.widthPixels}×${it.heightPixels}" }
+        val network = runCatching {
+            val manager = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            val capabilities = manager.getNetworkCapabilities(manager.activeNetwork)
+            when {
+                capabilities == null -> "Offline"
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Mobilnät"
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
+                else -> "Ansluten"
+            }
+        }.getOrDefault("Okänd")
+        worker.execute {
+            runCatching {
+                val version = packageManager.getPackageInfo(packageName, 0).versionName ?: "okänd"
+                val body = JSONObject()
+                    .put("input_screen_id", id)
+                    .put("input_player_version", version)
+                    .put("input_device_model", Build.MANUFACTURER.orEmpty() + " " + Build.MODEL.orEmpty())
+                    .put("input_android_version", Build.VERSION.RELEASE.orEmpty())
+                    .put("input_display_size", display)
+                    .put("input_network_type", network)
+                apiRequest("${baseUrl()}/rest/v1/rpc/player_report_device_info", "POST", body.toString())
+            }
         }
     }
 
@@ -1392,6 +1434,7 @@ class MainActivity : Activity() {
         refreshTask?.let(handler::removeCallbacks)
         heartbeatTask?.let(handler::removeCallbacks)
         previewTask?.let(handler::removeCallbacks)
+        deviceReportTask?.let(handler::removeCallbacks)
         scheduleTask?.let(handler::removeCallbacks)
         playerVideo?.stopPlayback()
         worker.shutdownNow()

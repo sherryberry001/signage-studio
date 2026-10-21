@@ -13,7 +13,7 @@ Signage Studio should cover the core jobs handled by mature digital-signage plat
 
 | Area | Current coverage | Next product milestone |
 | --- | --- | --- |
-| Screens and devices | Pairing, groups, online status, previews, bulk actions, remote restart/sync | Clean up duplicate device records; add hardware/app health, alerts, and device diagnostics |
+| Screens and devices | Pairing, groups, online status, previews, bulk actions, remote restart/sync, player version, TV model, Android version, resolution and network diagnostics | Add health history, alerts, and device troubleshooting actions |
 | Content | Text, image, video, web links, JSON feeds, reusable library | Robust upload pipeline, expiry/approval, reusable native app instances |
 | Playlists and channels | Reusable playlists, recurring schedules, priority, multi-zone | Drag ordering, calendar view, preview before publish, schedule conflict visibility |
 | Live data and apps | Native Pulse/JSON feed and web dashboard support | Integration catalog and credential-safe connectors with refresh/health indicators |
