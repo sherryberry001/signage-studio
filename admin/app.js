@@ -1,8 +1,132 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
+import './vendor/tus.min.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+function fileUploadProgress(form) {
+  let panel = form.querySelector('.file-upload-progress');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'file-upload-progress hidden';
+    panel.setAttribute('role', 'status');
+    panel.setAttribute('aria-live', 'polite');
+    const progress = document.createElement('progress');
+    progress.max = 100;
+    const message = document.createElement('span');
+    panel.append(progress, message);
+    form.querySelector('[name="file"]')?.closest('label')?.after(panel);
+  }
+  const [progress, message] = panel.children;
+  return {
+    update(percent, text) {
+      panel.classList.remove('hidden');
+      progress.value = Math.max(0, Math.min(100, percent));
+      message.textContent = text;
+    },
+    clear() { panel.classList.add('hidden'); }
+  };
+}
+
+function uploadResumeKey(file, prefix) {
+  return `signage-upload:${currentUser?.id || 'session'}:${prefix}:${file.name}:${file.size}:${file.lastModified}`;
+}
+
+async function uploadSignageFile(file, { form, prefix }) {
+  const TusUpload = window.tus?.Upload;
+  if (!TusUpload) throw new Error('Uppladdningsklienten kunde inte laddas. Ladda om adminvyn och försök igen.');
+  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) throw sessionError;
+  if (!session?.access_token) throw new Error('Din inloggning har gått ut. Logga in igen innan du laddar upp.');
+
+  const projectRef = new URL(SUPABASE_URL).hostname.split('.')[0];
+  const endpoint = `https://${projectRef}.storage.supabase.co/storage/v1/upload/resumable`;
+  const fileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const resumeKey = uploadResumeKey(file, prefix);
+  let path = '';
+  let hasStoredPath = false;
+  try {
+    path = sessionStorage.getItem(resumeKey) || '';
+    hasStoredPath = Boolean(path);
+  } catch { }
+  if (!path) {
+    path = `${prefix}/${crypto.randomUUID()}-${fileName}`;
+    try { sessionStorage.setItem(resumeKey, path); hasStoredPath = true; } catch { }
+  }
+
+  const progress = fileUploadProgress(form);
+  const submitButton = form.querySelector('button[type="submit"]');
+  if (submitButton) submitButton.disabled = true;
+  progress.update(0, `Förbereder ${file.name} …`);
+
+  let latestPercent = 0;
+  try {
+    await new Promise((resolve, reject) => {
+      const upload = new TusUpload(file, {
+        endpoint,
+        retryDelays: [0, 3000, 5000, 10000, 20000],
+        headers: {
+          authorization: `Bearer ${session.access_token}`,
+          apikey: SUPABASE_ANON_KEY,
+          'x-upsert': 'true'
+        },
+        uploadDataDuringCreation: true,
+        removeFingerprintOnSuccess: true,
+        chunkSize: 6 * 1024 * 1024,
+        metadata: {
+          bucketName: 'signage-assets',
+          objectName: path,
+          contentType: file.type || 'application/octet-stream',
+          cacheControl: '0'
+        },
+        onError: reject,
+        onProgress(bytesUploaded, bytesTotal) {
+          const percent = bytesTotal ? (bytesUploaded / bytesTotal) * 100 : 0;
+          latestPercent = percent;
+          const uploaded = formatUploadSize(bytesUploaded);
+          const total = formatUploadSize(bytesTotal);
+          progress.update(percent, `Laddar upp ${file.name} · ${Math.floor(percent)} % · ${uploaded} av ${total}`);
+        },
+        onSuccess() {
+          progress.update(100, `${file.name} uppladdad · sparar innehållet …`);
+          resolve();
+        }
+      });
+
+      upload.findPreviousUploads().then(previousUploads => {
+        const previous = previousUploads.find(item => item.metadata?.objectName === path)
+          || previousUploads.find(item => !hasStoredPath && item.metadata?.objectName?.startsWith(`${prefix}/`));
+        if (previous) {
+          if (previous.metadata?.objectName) path = previous.metadata.objectName;
+          upload.resumeFromPreviousUpload(previous);
+        }
+        upload.start();
+      }).catch(reject);
+    });
+    const source_url = supabase.storage.from('signage-assets').getPublicUrl(path).data.publicUrl;
+    let finalized = false;
+    return {
+      source_url,
+      finalize() {
+        if (finalized) return;
+        finalized = true;
+        try { sessionStorage.removeItem(resumeKey); } catch { }
+        progress.clear();
+      }
+    };
+  } catch (error) {
+    progress.update(latestPercent, `Uppladdningen pausades vid ${Math.floor(latestPercent)} %. Välj samma fil igen för att återuppta. ${error?.message || ''}`.trim());
+    throw error;
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
+}
+
+function formatUploadSize(bytes) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} kB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 let draftPreviewItems = [];
 let draftPreviewIndex = 0;
 const authView = $('#authView');
@@ -515,16 +639,19 @@ $('#mediaLibraryForm').addEventListener('submit', async event => {
   const integration_id = kind === 'feed' ? String(values.get('integration_id') || '') || null : null;
   const integration = signageIntegrations.find(item => item.id === integration_id);
   if (integration) source_url = integration.endpoint_url;
+  let uploadedFile = null;
   const file = values.get('file');
   if (file instanceof File && file.size > 0) {
     if (!['image', 'video'].includes(kind)) return toast('Välj bild eller video för att ladda upp en fil.', true);
     const maxBytes = kind === 'image' ? 30 * 1024 * 1024 : 400 * 1024 * 1024;
     if (file.size > maxBytes) return toast(kind === 'image' ? 'Bildfilen får vara högst 30 MB.' : 'Videofilen får vara högst 400 MB.', true);
     if (kind === 'image' && !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return toast('Bilder ska vara JPEG, PNG eller WebP.', true);
-    const path = `library/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    const { error: uploadError } = await supabase.storage.from('signage-assets').upload(path, file, { cacheControl: '0', upsert: false });
-    if (uploadError) return toast(uploadError.message, true);
-    source_url = supabase.storage.from('signage-assets').getPublicUrl(path).data.publicUrl;
+    try {
+      uploadedFile = await uploadSignageFile(file, { form, prefix: `library/${currentUser.id}` });
+      source_url = uploadedFile.source_url;
+    } catch (error) {
+      return toast(error.message || 'Filen kunde inte laddas upp.', true);
+    }
   }
   const body = String(values.get('body') || '').trim();
   if (['web', 'feed', 'image', 'video'].includes(kind) && !/^https?:\/\//i.test(source_url)) return toast('Ange en giltig HTTP- eller HTTPS-källa eller välj en fil.', true);
@@ -536,6 +663,7 @@ $('#mediaLibraryForm').addEventListener('submit', async event => {
   if (kind === 'feed' && (!Number.isInteger(refresh_interval_seconds) || refresh_interval_seconds < 10 || refresh_interval_seconds > 3600)) return toast('Uppdateringsintervallet ska vara 10–3600 sekunder.', true);
   const { error } = await supabase.from('media_library').insert({ kind, title: String(values.get('title') || '').trim(), body, source_url: source_url || null, integration_id, tags, expires_at, refresh_interval_seconds });
   if (error) return toast(error.message, true);
+  uploadedFile?.finalize();
   form.reset();
   $('#mediaLibraryForm [name="kind"]').dispatchEvent(new Event('change'));
   toast('Innehållet sparades i biblioteket.');
@@ -2309,6 +2437,7 @@ async function addSource(event, screen) {
   const integration_id = kind === 'feed' ? String(f.get('integration_id') || '') || null : null;
   const integration = signageIntegrations.find(item => item.id === integration_id);
   if (integration) source_url = integration.endpoint_url;
+  let uploadedFile = null;
   const file = f.get('file');
   const schedule = scheduleValues(f);
   if (!schedule) return;
@@ -2318,10 +2447,12 @@ async function addSource(event, screen) {
     const maxBytes = kind === 'image' ? 30 * 1024 * 1024 : 400 * 1024 * 1024;
     if (file.size > maxBytes) return toast(kind === 'image' ? 'Bildfilen får vara högst 30 MB.' : 'Videofilen får vara högst 400 MB.', true);
     if (kind === 'image' && !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return toast('Bilder ska vara JPEG, PNG eller WebP.', true);
-    const path = `${screen.playlist_id || screen.id}/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    const { error: uploadError } = await supabase.storage.from('signage-assets').upload(path, file, { cacheControl: '0', upsert: false });
-    if (uploadError) return toast(uploadError.message, true);
-    source_url = supabase.storage.from('signage-assets').getPublicUrl(path).data.publicUrl;
+    try {
+      uploadedFile = await uploadSignageFile(file, { form, prefix: `screens/${screen.playlist_id || screen.id}` });
+      source_url = uploadedFile.source_url;
+    } catch (error) {
+      return toast(error.message || 'Filen kunde inte laddas upp.', true);
+    }
   }
   if (!source_url) return toast('Ange en bild-/videolänk, en feed-URL eller välj en fil.', true);
   if (integration_id && !integration) return toast('Den valda Pulse-anslutningen finns inte längre. Ladda om sidan.', true);
@@ -2331,6 +2462,7 @@ async function addSource(event, screen) {
   if (kind === 'feed' && (!Number.isInteger(refresh_interval_seconds) || refresh_interval_seconds < 10 || refresh_interval_seconds > 3600)) return toast('Uppdateringsintervallet ska vara 10–3600 sekunder.', true);
   const { error } = await supabase.from('slides').insert({ ...contentOwner(screen), kind, title: String(f.get('title') || '').trim(), source_url, integration_id, duration_seconds: Number(f.get('duration')) || 30, refresh_interval_seconds, sort_order: await nextOrder(screen), is_active: true, ...schedule });
   if (error) return toast(error.message, true);
+  uploadedFile?.finalize();
   form.reset();
   form.querySelector('[name="kind"]').dispatchEvent(new Event('change'));
   toast('Innehållet publicerades.'); await loadScreens();
