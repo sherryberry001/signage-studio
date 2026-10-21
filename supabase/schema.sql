@@ -19,6 +19,7 @@ create table if not exists public.media_library (
   source_url text,
   duration_seconds integer not null default 30 check (duration_seconds between 5 and 600),
   refresh_interval_seconds integer not null default 30,
+  expires_at timestamptz,
   tags text[] not null default '{}',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -26,6 +27,7 @@ create table if not exists public.media_library (
 create index if not exists media_library_title_idx on public.media_library using gin (to_tsvector('simple', title));
 create index if not exists media_library_tags_idx on public.media_library using gin (tags);
 alter table public.media_library add column if not exists refresh_interval_seconds integer not null default 30;
+alter table public.media_library add column if not exists expires_at timestamptz;
 alter table public.media_library drop constraint if exists media_library_refresh_interval_check;
 alter table public.media_library add constraint media_library_refresh_interval_check check (refresh_interval_seconds between 10 and 3600);
 
@@ -158,6 +160,7 @@ create table if not exists public.slides (
   body text not null default '',
   source_url text,
   library_asset_id uuid references public.media_library(id) on delete set null,
+  expires_at timestamptz,
   duration_seconds integer not null default 15 check (duration_seconds between 5 and 600),
   refresh_interval_seconds integer not null default 30,
   sort_order integer not null default 0,
@@ -171,6 +174,7 @@ create table if not exists public.slides (
   constraint slides_content_owner_check check ((screen_id is null) <> (playlist_id is null))
 );
 alter table public.slides add column if not exists refresh_interval_seconds integer not null default 30;
+alter table public.slides add column if not exists expires_at timestamptz;
 alter table public.slides drop constraint if exists slides_refresh_interval_check;
 alter table public.slides add constraint slides_refresh_interval_check check (refresh_interval_seconds between 10 and 3600);
 
@@ -184,7 +188,7 @@ as $$
 begin
   update public.slides
   set kind = new.kind, title = new.title, body = new.body, source_url = new.source_url,
-      refresh_interval_seconds = new.refresh_interval_seconds
+      refresh_interval_seconds = new.refresh_interval_seconds, expires_at = new.expires_at
   where library_asset_id = new.id;
   return new;
 end;
@@ -192,7 +196,7 @@ $$;
 revoke all on function public.sync_media_library_references() from public;
 drop trigger if exists sync_media_library_references on public.media_library;
 create trigger sync_media_library_references
-  after update of kind, title, body, source_url, refresh_interval_seconds on public.media_library
+  after update of kind, title, body, source_url, refresh_interval_seconds, expires_at on public.media_library
   for each row execute function public.sync_media_library_references();
 
 -- Upgrade existing installations in place.
@@ -740,6 +744,7 @@ as $$
       and (ts.forced_slide_id is null or ts.forced_slide_id = sl.id)
   )
   select item from player_items
+  where (item->>'expires_at' is null or (item->>'expires_at')::timestamptz > now())
   order by (item->>'channel_priority')::integer, sort_order, created_at;
 $$;
 revoke all on function public.player_playlist(uuid) from public;
@@ -849,6 +854,7 @@ as $$
       and (ts.forced_slide_id is null or ts.forced_slide_id = sl.id)
   )
   select item from player_items
+  where (item->>'expires_at' is null or (item->>'expires_at')::timestamptz > now())
   order by (item->>'channel_priority')::integer, sort_order, created_at;
 $$;
 
@@ -1185,23 +1191,23 @@ begin
   update public.slides
   set kind = new.kind, title = new.title, body = new.body,
       source_url = new.source_url, integration_id = new.integration_id,
-      refresh_interval_seconds = new.refresh_interval_seconds
+      refresh_interval_seconds = new.refresh_interval_seconds, expires_at = new.expires_at
   where library_asset_id = new.id;
   return new;
 end;
 $$;
 drop trigger if exists sync_media_library_references on public.media_library;
 create trigger sync_media_library_references
-  after update of kind, title, body, source_url, integration_id, refresh_interval_seconds on public.media_library
+  after update of kind, title, body, source_url, integration_id, refresh_interval_seconds, expires_at on public.media_library
   for each row execute function public.sync_media_library_references();
 drop trigger if exists activity_slides_update on public.slides;
 create trigger activity_slides_update after update of screen_id, playlist_id, integration_id, kind, title, body, source_url,
-  library_asset_id, duration_seconds, refresh_interval_seconds, sort_order, is_active,
+  library_asset_id, duration_seconds, refresh_interval_seconds, expires_at, sort_order, is_active,
   active_from, active_until, weekdays, daily_start_time, daily_end_time
   on public.slides for each row execute function public.capture_activity_log();
 drop trigger if exists activity_media_library_update on public.media_library;
 create trigger activity_media_library_update after update of kind, title, body, source_url,
-  integration_id, duration_seconds, refresh_interval_seconds, tags on public.media_library
+  integration_id, duration_seconds, refresh_interval_seconds, expires_at, tags on public.media_library
   for each row execute function public.capture_activity_log();
 
 create or replace function public.team_list_signage_integrations()
@@ -1455,6 +1461,7 @@ as $$
     where ts.is_active and sl.is_active
   )
   select item from player_items
+  where (item->>'expires_at' is null or (item->>'expires_at')::timestamptz > now())
   order by (item->>'channel_priority')::integer,
            (item->>'channel_playlist_priority')::integer,
            (item->>'channel_playlist_order')::integer,
@@ -1639,6 +1646,7 @@ as $$
     where ts.is_active and sl.is_active
   )
   select item from player_items
+  where (item->>'expires_at' is null or (item->>'expires_at')::timestamptz > now())
   order by (item->>'channel_priority')::integer,
            (item->>'channel_playlist_priority')::integer,
            (item->>'channel_playlist_order')::integer,
@@ -1929,7 +1937,7 @@ create trigger activity_slides_insert_delete after insert or delete on public.sl
   for each row execute function public.capture_activity_log();
 drop trigger if exists activity_slides_update on public.slides;
 create trigger activity_slides_update after update of screen_id, playlist_id, kind, title, body, source_url,
-  library_asset_id, duration_seconds, refresh_interval_seconds, sort_order, is_active,
+  library_asset_id, duration_seconds, refresh_interval_seconds, expires_at, sort_order, is_active,
   active_from, active_until, weekdays, daily_start_time, daily_end_time
   on public.slides for each row execute function public.capture_activity_log();
 
@@ -1945,7 +1953,7 @@ create trigger activity_media_library_insert_delete after insert or delete on pu
   for each row execute function public.capture_activity_log();
 drop trigger if exists activity_media_library_update on public.media_library;
 create trigger activity_media_library_update after update of kind, title, body, source_url,
-  duration_seconds, refresh_interval_seconds, tags on public.media_library
+  duration_seconds, refresh_interval_seconds, expires_at, tags on public.media_library
   for each row execute function public.capture_activity_log();
 
 drop trigger if exists activity_channels_insert_delete on public.channels;

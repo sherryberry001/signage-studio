@@ -110,6 +110,14 @@ function localDateInput(date) {
   return local.toISOString().slice(0, 10);
 }
 
+function localDateTimeInput(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
 function shortCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const bytes = crypto.getRandomValues(new Uint8Array(6));
@@ -420,6 +428,10 @@ $('#mediaLibraryForm').addEventListener('submit', async event => {
   const values = new FormData(form);
   const kind = String(values.get('kind'));
   let source_url = String(values.get('source_url') || '').trim();
+  const expiryInput = String(values.get('expires_at') || '').trim();
+  const expiryDate = expiryInput ? new Date(expiryInput) : null;
+  if (expiryDate && Number.isNaN(expiryDate.getTime())) return toast('Ange en giltig utgångstid.', true);
+  const expires_at = expiryDate ? expiryDate.toISOString() : null;
   const integration_id = kind === 'feed' ? String(values.get('integration_id') || '') || null : null;
   const integration = signageIntegrations.find(item => item.id === integration_id);
   if (integration) source_url = integration.endpoint_url;
@@ -442,7 +454,7 @@ $('#mediaLibraryForm').addEventListener('submit', async event => {
   const tags = [...new Set(String(values.get('tags') || '').split(',').map(tag => tag.trim().toLocaleLowerCase('sv-SE')).filter(Boolean))];
   const refresh_interval_seconds = kind === 'feed' ? Number(values.get('refresh_interval_seconds') || 30) : 30;
   if (kind === 'feed' && (!Number.isInteger(refresh_interval_seconds) || refresh_interval_seconds < 10 || refresh_interval_seconds > 3600)) return toast('Uppdateringsintervallet ska vara 10–3600 sekunder.', true);
-  const { error } = await supabase.from('media_library').insert({ kind, title: String(values.get('title') || '').trim(), body, source_url: source_url || null, integration_id, tags, refresh_interval_seconds });
+  const { error } = await supabase.from('media_library').insert({ kind, title: String(values.get('title') || '').trim(), body, source_url: source_url || null, integration_id, tags, expires_at, refresh_interval_seconds });
   if (error) return toast(error.message, true);
   form.reset();
   $('#mediaLibraryForm [name="kind"]').dispatchEvent(new Event('change'));
@@ -923,7 +935,9 @@ function renderMediaLibrary() {
     row.className = 'media-library-row';
     const integration = signageIntegrations.find(value => value.id === item.integration_id);
     const sourceLabel = integration ? `Skyddad Pulse · ${integration.name}` : item.source_url || item.body || '';
-    row.innerHTML = `<div class="media-library-main"><div class="media-library-detail"><strong>${esc(item.title)}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s${item.kind === 'feed' ? ` · hämtas var ${item.refresh_interval_seconds || 30}s` : ''} ${item.tags?.length ? `· ${item.tags.map(tag => `#${esc(tag)}`).join(' ')}` : ''}</span><small>${esc(sourceLabel)}</small></div><details class="media-library-edit" ${['admin','editor'].includes(currentRole) ? '' : 'hidden'}><summary>Redigera</summary><form data-library-edit="${esc(item.id)}"><input name="title" maxlength="120" value="${esc(item.title)}" required aria-label="Namn" /><input name="source_url" type="url" value="${esc(item.source_url || '')}" placeholder="Källans URL" aria-label="Källans URL" /><label class="library-integration-setting ${item.kind === 'feed' ? '' : 'hidden'}">Pulse-anslutning<select name="integration_id" data-selected-integration="${esc(item.integration_id || '')}"><option value="">Vanlig JSON-feed</option></select></label><textarea name="body" maxlength="1200" placeholder="Textinnehåll" aria-label="Textinnehåll">${esc(item.body || '')}</textarea><input name="tags" maxlength="200" value="${esc((item.tags || []).join(', '))}" placeholder="Taggar, separerade med komma" aria-label="Taggar" />${item.kind === 'feed' ? `<label class="feed-refresh-setting">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="${item.refresh_interval_seconds || 30}" required /></label>` : ''}<button class="button ghost small" type="submit">Spara ändringar</button></form></details></div><div class="media-library-actions"><select aria-label="Välj spellista för ${esc(item.title)}" data-library-playlist>${options}</select><button class="button ghost small" type="button" data-library-add="${esc(item.id)}" ${['admin','editor'].includes(currentRole) ? '' : 'disabled'}>Lägg till</button><button class="icon-button delete" type="button" aria-label="Ta bort ${esc(item.title)}" data-library-delete="${esc(item.id)}" ${currentRole === 'admin' || currentRole === 'editor' ? '' : 'hidden'}>×</button></div>`;
+    const expired = Boolean(item.expires_at && new Date(item.expires_at).getTime() <= Date.now());
+    const expiryLabel = item.expires_at ? `${expired ? 'Utgången' : 'Visas till'} ${new Date(item.expires_at).toLocaleString('sv-SE')}` : 'Ingen utgångstid';
+    row.innerHTML = `<div class="media-library-main"><div class="media-library-detail"><strong>${esc(item.title)}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s${item.kind === 'feed' ? ` · hämtas var ${item.refresh_interval_seconds || 30}s` : ''} · ${esc(expiryLabel)} ${item.tags?.length ? `· ${item.tags.map(tag => `#${esc(tag)}`).join(' ')}` : ''}</span><small>${esc(sourceLabel)}</small></div><details class="media-library-edit" ${['admin','editor'].includes(currentRole) ? '' : 'hidden'}><summary>Redigera</summary><form data-library-edit="${esc(item.id)}"><input name="title" maxlength="120" value="${esc(item.title)}" required aria-label="Namn" /><input name="source_url" type="url" value="${esc(item.source_url || '')}" placeholder="Källans URL" aria-label="Källans URL" /><label class="library-integration-setting ${item.kind === 'feed' ? '' : 'hidden'}">Pulse-anslutning<select name="integration_id" data-selected-integration="${esc(item.integration_id || '')}"><option value="">Vanlig JSON-feed</option></select></label><textarea name="body" maxlength="1200" placeholder="Textinnehåll" aria-label="Textinnehåll">${esc(item.body || '')}</textarea><input name="tags" maxlength="200" value="${esc((item.tags || []).join(', '))}" placeholder="Taggar, separerade med komma" aria-label="Taggar" /><label class="media-expiry-field">Utgångstid (valfritt)<input name="expires_at" type="datetime-local" value="${esc(localDateTimeInput(item.expires_at))}" /><small>Poster slutar visas efter tiden även från TV:ns offlinecache.</small></label>${item.kind === 'feed' ? `<label class="feed-refresh-setting">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="${item.refresh_interval_seconds || 30}" required /></label>` : ''}<button class="button ghost small" type="submit">Spara ändringar</button></form></details></div><div class="media-library-actions"><select aria-label="Välj spellista för ${esc(item.title)}" data-library-playlist>${options}</select><button class="button ghost small" type="button" data-library-add="${esc(item.id)}" ${['admin','editor'].includes(currentRole) && !expired ? '' : 'disabled'}>${expired ? 'Utgången' : 'Lägg till'}</button><button class="icon-button delete" type="button" aria-label="Ta bort ${esc(item.title)}" data-library-delete="${esc(item.id)}" ${currentRole === 'admin' || currentRole === 'editor' ? '' : 'hidden'}>×</button></div>`;
     return row;
   }));
   populateFeedIntegrationSelects();
@@ -943,6 +957,10 @@ function renderMediaLibrary() {
     const integration = signageIntegrations.find(item => item.id === integration_id);
     if (integration) source_url = integration.endpoint_url;
     const body = String(values.get('body') || '').trim();
+    const expiryInput = String(values.get('expires_at') || '').trim();
+    const expiryDate = expiryInput ? new Date(expiryInput) : null;
+    if (expiryDate && Number.isNaN(expiryDate.getTime())) return toast('Ange en giltig utgångstid.', true);
+    const expires_at = expiryDate ? expiryDate.toISOString() : null;
     if (['web', 'feed', 'image', 'video'].includes(asset.kind) && !/^https?:\/\//i.test(source_url)) return toast('Ange en giltig HTTP- eller HTTPS-källa.', true);
     if (asset.kind === 'text' && !body) return toast('Textinnehållet får inte vara tomt.', true);
     const tags = [...new Set(String(values.get('tags') || '').split(',').map(tag => tag.trim().toLocaleLowerCase('sv-SE')).filter(Boolean))];
@@ -950,7 +968,7 @@ function renderMediaLibrary() {
     if (asset.kind === 'feed' && (!Number.isInteger(refresh_interval_seconds) || refresh_interval_seconds < 10 || refresh_interval_seconds > 3600)) return toast('Uppdateringsintervallet ska vara 10–3600 sekunder.', true);
     if (integration_id && !integration) return toast('Den valda Pulse-anslutningen finns inte längre. Ladda om sidan.', true);
     if (asset.kind === 'feed' && !integration_id && /#token=/i.test(source_url)) return toast('Lägg Pulse-token i en skyddad Pulse-anslutning under Integrationer, inte i feed-URL:en.', true);
-    const { error } = await supabase.from('media_library').update({ title, source_url: source_url || null, integration_id, body, tags, refresh_interval_seconds, updated_at: new Date().toISOString() }).eq('id', id);
+    const { error } = await supabase.from('media_library').update({ title, source_url: source_url || null, integration_id, body, tags, expires_at, refresh_interval_seconds, updated_at: new Date().toISOString() }).eq('id', id);
     if (error) return toast(error.message, true);
     toast('Biblioteksposten och dess spellistereferenser uppdaterades.');
     await loadScreens();
@@ -960,9 +978,10 @@ function renderMediaLibrary() {
     const playlist_id = row.querySelector('[data-library-playlist]').value;
     if (!playlist_id) return toast('Välj en spellista först.', true);
     const asset = mediaLibrary.find(item => item.id === button.dataset.libraryAdd);
+    if (asset?.expires_at && new Date(asset.expires_at).getTime() <= Date.now()) return toast('Den här biblioteksposten har gått ut. Ändra utgångstiden innan du lägger till den.', true);
     const { data: last, error: orderError } = await supabase.from('slides').select('sort_order').eq('playlist_id', playlist_id).order('sort_order', { ascending: false }).limit(1).maybeSingle();
     if (orderError) return toast(orderError.message, true);
-    const { error } = await supabase.from('slides').insert({ playlist_id, screen_id: null, library_asset_id: asset.id, integration_id: asset.integration_id, kind: asset.kind, title: asset.title, body: asset.body, source_url: asset.source_url, duration_seconds: asset.duration_seconds, refresh_interval_seconds: asset.refresh_interval_seconds || 30, sort_order: (last?.sort_order ?? -1) + 1, is_active: true });
+    const { error } = await supabase.from('slides').insert({ playlist_id, screen_id: null, library_asset_id: asset.id, integration_id: asset.integration_id, kind: asset.kind, title: asset.title, body: asset.body, source_url: asset.source_url, duration_seconds: asset.duration_seconds, refresh_interval_seconds: asset.refresh_interval_seconds || 30, expires_at: asset.expires_at, sort_order: (last?.sort_order ?? -1) + 1, is_active: true });
     if (error) return toast(error.message, true);
     toast(`“${asset.title}” lades till i spellistan.`);
     await loadScreens();

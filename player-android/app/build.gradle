@@ -18,8 +18,8 @@ android {
         applicationId 'com.signage.player'
         minSdk 26
         targetSdk 28
-        versionCode 16
-        versionName '1.15.0'
+        versionCode 17
+        versionName '1.16.0'
         buildConfigField 'String', 'SUPABASE_URL', quoteBuildConfig(signage.getProperty('SUPABASE_URL', ''))
         buildConfigField 'String', 'SUPABASE_ANON_KEY', quoteBuildConfig(signage.getProperty('SUPABASE_ANON_KEY', ''))
     }

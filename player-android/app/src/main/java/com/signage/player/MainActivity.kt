@@ -785,6 +785,13 @@ class MainActivity : Activity() {
         return isScheduled(item, "active_from", "active_until", "weekdays", "daily_start_time", "daily_end_time")
     }
 
+    private fun isNotExpired(item: JSONObject, now: Instant = Instant.now()): Boolean {
+        val expiry = item.optString("expires_at")
+            .takeIf { it.isNotBlank() && it != "null" }
+            ?.let { runCatching { Instant.parse(it) }.getOrNull() }
+        return expiry == null || now.isBefore(expiry)
+    }
+
     private fun isSynchronizedPlayback(): Boolean = screenConfig.optString("playback_mode") == "sync"
 
     /** Derive the same cyclic item and next boundary on every player using the wall clock. */
@@ -829,6 +836,7 @@ class MainActivity : Activity() {
 
     private fun isScheduled(item: JSONObject, fromKey: String, untilKey: String, weekdaysKey: String, startKey: String, endKey: String): Boolean {
         val now = Instant.now()
+        if (!isNotExpired(item, now)) return false
         val from = item.optString(fromKey).takeIf { it.isNotBlank() && it != "null" }?.let { runCatching { Instant.parse(it) }.getOrNull() }
         val until = item.optString(untilKey).takeIf { it.isNotBlank() && it != "null" }?.let { runCatching { Instant.parse(it) }.getOrNull() }
         if ((from != null && now.isBefore(from)) || (until != null && !now.isBefore(until))) return false
@@ -862,7 +870,7 @@ class MainActivity : Activity() {
         val all = (0 until slides.length()).mapNotNull { slides.optJSONObject(it) }
         val now = Instant.now()
         val forced = all.firstOrNull { item ->
-            if (!item.optBoolean("forced")) return@firstOrNull false
+            if (!item.optBoolean("forced") || !isNotExpired(item, now)) return@firstOrNull false
             val forcedUntil = item.optString("forced_until")
                 .takeIf { it.isNotBlank() && it != "null" }
                 ?.let { runCatching { Instant.parse(it) }.getOrNull() }
