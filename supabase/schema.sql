@@ -83,15 +83,20 @@ create table if not exists public.screen_groups (
 
 alter table public.screens add column if not exists group_id uuid;
 alter table public.screens add column if not exists device_identity text;
+alter table public.screens add column if not exists archived_at timestamptz;
 alter table public.screens add column if not exists preview_updated_at timestamptz;
 alter table public.screens add column if not exists playback_mode text not null default 'independent';
 alter table public.screens drop constraint if exists screens_playback_mode_check;
 alter table public.screens add constraint screens_playback_mode_check
   check (playback_mode in ('independent', 'sync', 'random'));
+alter table public.screens drop constraint if exists screens_archived_profiles_are_paused_check;
+alter table public.screens add constraint screens_archived_profiles_are_paused_check
+  check (archived_at is null or is_active = false);
 alter table public.screens drop constraint if exists screens_group_id_fkey;
 alter table public.screens add constraint screens_group_id_fkey
   foreign key (group_id) references public.screen_groups(id) on delete set null;
 create index if not exists screens_group_idx on public.screens(group_id, created_at desc);
+create index if not exists screens_archived_idx on public.screens(archived_at desc) where archived_at is not null;
 create unique index if not exists screen_groups_name_ci_idx on public.screen_groups(lower(btrim(name)));
 create unique index if not exists screens_name_ci_active_idx
   on public.screens(lower(btrim(name))) where is_active = true;

@@ -1046,7 +1046,7 @@ async function loadScreens() {
   });
   renderScreenDirectory();
   if (selectedScreenDetailId && activeWorkspace === 'screen-detail') {
-    if (screenRenderData.has(selectedScreenDetailId)) openScreenDetails(selectedScreenDetailId);
+    if (screenRenderData.has(selectedScreenDetailId) && !screens.find(screen => screen.id === selectedScreenDetailId)?.archived_at) openScreenDetails(selectedScreenDetailId);
     else { selectedScreenDetailId = null; setWorkspace('screens'); }
   }
   selectedScreenIds.forEach(id => { if (!screens.some(screen => screen.id === id)) selectedScreenIds.delete(id); });
@@ -2333,7 +2333,7 @@ function compareScreenProfiles(left, right) {
 
 function screenProfileGroups(source = screens) {
   const groups = new Map();
-  source.forEach(screen => {
+  source.filter(screen => !screen.archived_at).forEach(screen => {
     const key = screenProfileKey(screen);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(screen);
@@ -2342,13 +2342,13 @@ function screenProfileGroups(source = screens) {
 }
 
 function logicalScreens(source = screens) {
-  return screenProfileGroups(source).map(group => [...group].sort(compareScreenProfiles)[0]);
+  return screenProfileGroups(source.filter(screen => !screen.archived_at)).map(group => [...group].sort(compareScreenProfiles)[0]);
 }
 
 function screenProfileIds(screenId) {
   const selected = screens.find(screen => screen.id === screenId);
   if (!selected) return [];
-  return screens.filter(screen => screenProfileKey(screen) === screenProfileKey(selected)).map(screen => screen.id);
+  return screens.filter(screen => !screen.archived_at && screenProfileKey(screen) === screenProfileKey(selected)).map(screen => screen.id);
 }
 
 function selectedLogicalScreens() {
@@ -2504,11 +2504,35 @@ $('#operationalAlerts').addEventListener('click', event => {
 function updateScreenSummary() {
   const devices = logicalScreens();
   const online = devices.filter(isOnline).length;
-  const hiddenProfiles = screens.length - devices.length;
-  $('#screenCount').textContent = `${devices.length} ${devices.length === 1 ? 'TV' : 'TV-apparater'} · ${online} online${hiddenProfiles ? ` · ${hiddenProfiles} äldre profiler dolda` : ''}`;
+  const visibleProfiles = screens.filter(screen => !screen.archived_at).length;
+  const hiddenProfiles = visibleProfiles - devices.length;
+  const archivedCount = screens.filter(screen => screen.archived_at).length;
+  $('#screenCount').textContent = `${devices.length} ${devices.length === 1 ? 'TV' : 'TV-apparater'} · ${online} online${hiddenProfiles ? ` · ${hiddenProfiles} äldre profiler dolda` : ''}${archivedCount ? ` · ${archivedCount} arkiverade` : ''}`;
   renderOperationalAlerts();
   renderScreenDirectory();
+  renderArchivedScreens();
 }
+
+function renderArchivedScreens() {
+  const container = $('#archivedScreenList');
+  if (!container) return;
+  const archived = screens.filter(screen => screen.archived_at).sort((a, b) => new Date(b.archived_at) - new Date(a.archived_at));
+  container.innerHTML = archived.length
+    ? archived.map(screen => `<div class="archived-screen-row"><span><strong>${esc(screen.name)}</strong><small>Arkiverad ${esc(new Date(screen.archived_at).toLocaleString('sv-SE'))} · innehåll och historik bevaras</small></span><button class="button ghost small" type="button" data-restore-screen="${esc(screen.id)}" ${currentRole === 'admin' ? '' : 'disabled'}>Återställ</button></div>`).join('')
+    : '<div class="screen-groups-empty">Inga arkiverade skärmar.</div>';
+}
+
+$('#archivedScreenList')?.addEventListener('click', async event => {
+  const button = event.target.closest('[data-restore-screen]');
+  if (!button || currentRole !== 'admin') return;
+  const screen = screens.find(item => item.id === button.dataset.restoreScreen && item.archived_at);
+  if (!screen) return;
+  button.disabled = true;
+  const { error } = await supabase.from('screens').update({ archived_at: null }).eq('id', screen.id);
+  if (error) { button.disabled = false; return toast(error.message, true); }
+  toast(`”${screen.name}” återställdes. Skärmen förblir pausad tills du aktiverar den.`);
+  await loadScreens();
+});
 
 function renderScreenDirectory() {
   if (!screenDirectoryList) return;
@@ -2529,7 +2553,7 @@ function renderScreenDirectory() {
     const currentKind = online ? kindLabel(screen.current_kind) : 'Offline';
     const selected = screenProfileIds(screen.id).some(id => selectedScreenIds.has(id));
     const duplicateCount = screenProfileGroups().find(entries => entries.some(item => item.id === screen.id))?.length || 1;
-    const sameNameCount = screens.filter(item => screenNameKey(item) === screenNameKey(screen)).length;
+    const sameNameCount = screens.filter(item => !item.archived_at && screenNameKey(item) === screenNameKey(screen)).length;
     return `<article class="screen-directory-card" data-screen-id="${esc(screen.id)}" data-screen-name="${esc(screen.name || '')}" data-screen-current="${esc(screen.current_title || '')}" data-screen-status="${online ? 'online' : screen.pair_code ? 'pairing' : 'offline'}" data-screen-publish="${deliveryState}" data-screen-group="${esc(screen.group_id || '')}" data-screen-location="${esc(screen.location_id || '')}">
       <label class="screen-directory-select"><input class="screen-directory-checkbox" type="checkbox" ${selected ? 'checked' : ''} ${['admin', 'editor'].includes(currentRole) ? '' : 'disabled'} aria-label="Välj ${esc(screen.name)}" /></label>
       <button class="screen-directory-open" type="button" data-open-screen="${esc(screen.id)}" aria-label="Öppna inställningar för ${esc(screen.name)}">
@@ -3903,7 +3927,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   card.innerHTML = `
     <div class="screen-head">
       <div class="screen-title-wrap"><input class="screen-select ${canEdit ? '' : 'hidden'}" type="checkbox" ${selectedScreenIds.has(screen.id) ? 'checked' : ''} aria-label="Välj ${esc(screen.name)}" /><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${esc(screenGroup?.name || 'Ingen grupp')} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · ${sameNameCount} profiler med samma namn` : ''}</div></div></div>
-      <div class="screen-actions">${pending}<button class="button ghost small preview-screen" type="button">Förhandsvisa utkast</button><button class="button primary small request-publish-screen ${!canAdmin && canEdit ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Skicka för godkännande</button><button class="button primary small publish-screen ${canAdmin ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Publicera</button><button class="button ghost small renew-pairing ${canAdmin ? '' : 'hidden'}">Ny kod</button><button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
+      <div class="screen-actions">${pending}<button class="button ghost small preview-screen" type="button">Förhandsvisa utkast</button><button class="button primary small request-publish-screen ${!canAdmin && canEdit ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Skicka för godkännande</button><button class="button primary small publish-screen ${canAdmin ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Publicera</button><button class="button ghost small renew-pairing ${canAdmin ? '' : 'hidden'}">Ny kod</button><button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small archive-screen ${canAdmin && !screen.is_active && !screen.archived_at && Object.prototype.hasOwnProperty.call(screen, 'archived_at') ? '' : 'hidden'}" type="button">Arkivera profil</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
     </div>
     <div class="screen-publication-state">Senast publicerad ${publication ? `version ${esc(publication.revision)} · ${esc(new Date(publication.published_at).toLocaleString('sv-SE'))}` : 'inte ännu'} · ${esc(publicationDeliverySummary(screen, publication))} · ändringar ligger som utkast tills du publicerar.</div>
     ${pendingPublicationRequest ? `<div class="publication-request-state"><span><strong>Väntar på publiceringsgodkännande</strong><small>Inskickad av ${esc(requestOwner)} · ${esc(new Date(pendingPublicationRequest.requested_at).toLocaleString('sv-SE'))}</small></span>${canAdmin ? `<div><button class="button primary small review-publication" type="button" data-decision="approve" data-request-id="${esc(pendingPublicationRequest.id)}">Godkänn och publicera</button><button class="button ghost small review-publication" type="button" data-decision="reject" data-request-id="${esc(pendingPublicationRequest.id)}">Avslå</button></div>` : ''}</div>` : latestPublicationRequest?.status === 'rejected' ? `<div class="publication-request-state rejected"><span><strong>Senaste publiceringsbegäran avslogs</strong><small>${esc(latestPublicationRequest.review_note || 'Ingen kommentar från admin.')}</small></span></div>` : ''}
@@ -4085,6 +4109,15 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   card.querySelector('.toggle-screen').addEventListener('click', async () => {
     const { error } = await supabase.from('screens').update({ is_active: !screen.is_active }).eq('id', screen.id);
     if (error) toast(error.message, true); else loadScreens();
+  });
+  card.querySelector('.archive-screen').addEventListener('click', async () => {
+    if (currentRole !== 'admin' || screen.is_active || !Object.prototype.hasOwnProperty.call(screen, 'archived_at')) return;
+    if (!confirm(`Arkivera den pausade profilen ”${screen.name}”? Den försvinner från vanliga skärmlistor, medan historik och innehåll bevaras. Du kan återställa profilen från Organisation → Arkiverade skärmar.`)) return;
+    const { error } = await supabase.from('screens').update({ is_active: false, archived_at: new Date().toISOString() }).eq('id', screen.id);
+    if (error) return toast(error.message, true);
+    selectedScreenDetailId = null;
+    toast(`”${screen.name}” arkiverades. Historik och innehåll finns kvar.`);
+    await loadScreens();
   });
   card.querySelector('.renew-pairing').addEventListener('click', async () => {
     if (!confirm(`Skapa en ny kod för ”${screen.name}”? Den befintliga TV:n kopplas inte bort. Använd bara detta när du återställer eller parkopplar om spelaren.`)) return;
