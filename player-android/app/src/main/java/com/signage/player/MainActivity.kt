@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.PixelCopy
 import android.view.View
 import android.view.WindowManager
 import android.webkit.CookieManager
@@ -40,6 +41,7 @@ import java.util.concurrent.Executors
 class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
+    private val previewWorker = Executors.newSingleThreadExecutor()
     private val prefs by lazy { getSharedPreferences("signage-player", MODE_PRIVATE) }
     private lateinit var root: FrameLayout
     private var screenId: String? = null
@@ -62,6 +64,8 @@ class MainActivity : Activity() {
     private var clockTask: Runnable? = null
     private var heartbeatTask: Runnable? = null
     private var scheduleTask: Runnable? = null
+    private var previewTask: Runnable? = null
+    private var previewUploadRunning = false
     private var zoneAdvanceTask: Runnable? = null
     private var zoneClockTask: Runnable? = null
     private var zoneGeneration = 0
@@ -175,6 +179,14 @@ class MainActivity : Activity() {
             }
         }
         handler.postDelayed(heartbeatTask!!, 15_000)
+        previewTask?.let(handler::removeCallbacks)
+        previewTask = object : Runnable {
+            override fun run() {
+                captureAndUploadPreview()
+                handler.postDelayed(this, 30_000)
+            }
+        }
+        handler.postDelayed(previewTask!!, 8_000)
         scheduleTask?.let(handler::removeCallbacks)
         scheduleTask = object : Runnable {
             override fun run() {
@@ -308,6 +320,67 @@ class MainActivity : Activity() {
                 .put("input_error", error ?: JSONObject.NULL)
             apiRequest("${baseUrl()}/rest/v1/rpc/player_complete_command", "POST", body.toString())
         } catch (_: Exception) { }
+    }
+
+    private fun captureAndUploadPreview() {
+        if (previewUploadRunning || isFinishing || isDestroyed) return
+        val width = window.decorView.width
+        val height = window.decorView.height
+        if (width <= 0 || height <= 0) return
+        previewUploadRunning = true
+        val scale = minOf(1f, 1280f / width)
+        val bitmap = Bitmap.createBitmap((width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1), Bitmap.Config.RGB_565)
+        PixelCopy.request(window, bitmap, { result ->
+            if (result != PixelCopy.SUCCESS) {
+                bitmap.recycle()
+                previewUploadRunning = false
+                return@request
+            }
+            val id = screenId
+            if (id.isNullOrBlank()) {
+                bitmap.recycle()
+                previewUploadRunning = false
+                return@request
+            }
+            previewWorker.execute {
+                try {
+                    val bytes = java.io.ByteArrayOutputStream().use { output ->
+                        check(bitmap.compress(Bitmap.CompressFormat.JPEG, 62, output))
+                        output.toByteArray()
+                    }
+                    uploadPreview(id, bytes)
+                } catch (_: Exception) {
+                    // The next periodic capture retries if the connection or upload failed.
+                } finally {
+                    bitmap.recycle()
+                    handler.post { previewUploadRunning = false }
+                }
+            }
+        }, handler)
+    }
+
+    private fun uploadPreview(id: String, bytes: ByteArray) {
+        val address = "${baseUrl()}/functions/v1/report-screen-preview"
+        val conn = (URL(address).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 12_000
+            readTimeout = 20_000
+            doOutput = true
+            setRequestProperty("apikey", BuildConfig.SUPABASE_ANON_KEY)
+            setRequestProperty("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
+            setRequestProperty("x-screen-id", id)
+            setRequestProperty("Content-Type", "image/jpeg")
+            setRequestProperty("Cache-Control", "no-cache, no-store")
+        }
+        try {
+            conn.outputStream.use { it.write(bytes) }
+            val status = conn.responseCode
+            val stream = if (status in 200..299) conn.inputStream else conn.errorStream
+            val message = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (status !in 200..299) throw IllegalStateException("Preview upload failed ($status): ${message.take(200)}")
+        } finally {
+            conn.disconnect()
+        }
     }
 
     private fun preloadMedia(items: JSONArray) {
@@ -1318,9 +1391,11 @@ class MainActivity : Activity() {
         feedRefreshTask?.let(handler::removeCallbacks)
         refreshTask?.let(handler::removeCallbacks)
         heartbeatTask?.let(handler::removeCallbacks)
+        previewTask?.let(handler::removeCallbacks)
         scheduleTask?.let(handler::removeCallbacks)
         playerVideo?.stopPlayback()
         worker.shutdownNow()
+        previewWorker.shutdownNow()
         super.onDestroy()
     }
 }

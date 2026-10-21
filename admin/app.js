@@ -899,12 +899,27 @@ async function queueBulkPlayerCommand(command, button) {
 async function refreshScreenStatus() {
   if (!currentUser) return;
   const [{ data, error }, { data: commandData, error: commandError }] = await Promise.all([
-    supabase.from('screens').select('id,last_seen_at,current_title,current_body,current_kind,current_source_url,current_slide_id,forced_slide_id'),
+    supabase.from('screens').select('id,last_seen_at,preview_updated_at,current_title,current_body,current_kind,current_source_url,current_slide_id,forced_slide_id'),
     supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100)
   ]);
   if (error || commandError) return;
   screenCommands = commandData || [];
-  const liveById = new Map((data || []).map(item => [item.id, item]));
+  const liveWithPreviews = await Promise.all((data || []).map(async screen => {
+    if (!screen.preview_updated_at || !isOnline(screen)) return screen;
+    const previous = screens.find(item => item.id === screen.id);
+    if (previous?.preview_updated_at === screen.preview_updated_at
+      && (previous.preview_url_expires_at || 0) > Date.now() + 10_000) {
+      return { ...screen, preview_url: previous.preview_url || null, preview_url_expires_at: previous.preview_url_expires_at };
+    }
+    const path = `screens/${screen.id}/current.jpg`;
+    const { data: preview } = await supabase.storage.from('signage-previews').createSignedUrl(path, 300);
+    return {
+      ...screen,
+      preview_url: preview?.signedUrl || null,
+      preview_url_expires_at: Date.now() + (preview?.signedUrl ? 300_000 : 30_000)
+    };
+  }));
+  const liveById = new Map(liveWithPreviews.map(item => [item.id, item]));
   screens = screens.map(screen => ({ ...screen, ...(liveById.get(screen.id) || {}) }));
   updateScreenSummary();
   for (const screen of screens) {
@@ -960,7 +975,7 @@ function formatCommandStatus(command) {
 
 function updateCurrentPreview(container, screen, online) {
   if (!container) return;
-  const key = online ? `${screen.current_kind || ''}|${screen.current_title || ''}|${screen.current_body || ''}|${screen.current_source_url || ''}` : 'offline';
+  const key = online ? `${screen.preview_updated_at || ''}|${screen.preview_url || ''}|${screen.current_kind || ''}|${screen.current_title || ''}|${screen.current_body || ''}|${screen.current_source_url || ''}` : 'offline';
   if (container.dataset.previewKey === key) return;
   container.dataset.previewKey = key;
   container.replaceChildren();
@@ -968,6 +983,20 @@ function updateCurrentPreview(container, screen, online) {
     container.textContent = 'Ingen signal från spelaren';
     return;
   }
+  if (screen.preview_url) {
+    const image = document.createElement('img');
+    image.src = screen.preview_url;
+    image.alt = `Livebild från ${screen.name || 'skärmen'}`;
+    image.onerror = () => {
+      if (container.dataset.previewKey === key) renderContentPreview(container, screen);
+    };
+    container.append(image);
+    return;
+  }
+  renderContentPreview(container, screen);
+}
+
+function renderContentPreview(container, screen) {
   if (screen.current_kind === 'image' && /^https?:\/\//i.test(screen.current_source_url || '')) {
     const image = document.createElement('img');
     image.src = screen.current_source_url;

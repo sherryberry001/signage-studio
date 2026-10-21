@@ -55,6 +55,7 @@ create table if not exists public.screens (
   created_at timestamptz not null default now(),
   activated_at timestamptz,
   last_seen_at timestamptz,
+  preview_updated_at timestamptz,
   current_slide_id uuid,
   current_title text not null default 'Väntar på innehåll',
   current_body text not null default '',
@@ -74,6 +75,7 @@ create table if not exists public.screen_groups (
 );
 
 alter table public.screens add column if not exists group_id uuid;
+alter table public.screens add column if not exists preview_updated_at timestamptz;
 alter table public.screens drop constraint if exists screens_group_id_fkey;
 alter table public.screens add constraint screens_group_id_fkey
   foreign key (group_id) references public.screen_groups(id) on delete set null;
@@ -613,6 +615,23 @@ values ('signage-assets', 'signage-assets', true, 419430400,
   array['image/jpeg','image/png','image/webp','video/mp4','video/webm','video/quicktime','application/vnd.apple.mpegurl','application/x-mpegURL'])
 on conflict (id) do update set public = true, file_size_limit = 419430400,
   allowed_mime_types = excluded.allowed_mime_types;
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('signage-previews', 'signage-previews', false, 2097152, array['image/jpeg'])
+on conflict (id) do update set public = false, file_size_limit = 2097152,
+  allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "Team can read live screen previews" on storage.objects;
+create policy "Team can read live screen previews" on storage.objects
+  for select to authenticated using (
+    bucket_id = 'signage-previews'
+    and case
+      when name ~ '^screens/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/current\.jpg$'
+      then public.team_has_role(array['admin','editor','viewer'])
+        or public.user_can_access_screen(split_part(name, '/', 2)::uuid)
+      else false
+    end
+  );
 
 drop policy if exists "Public can read signage videos" on storage.objects;
 create policy "Public can read signage videos" on storage.objects
