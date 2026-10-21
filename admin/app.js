@@ -1160,19 +1160,31 @@ function updateChannelCalendarScreens() {
   select.value = availableScreens.some(screen => screen.id === selected) ? selected : 'all';
 }
 
-function scheduleDaySegments(schedule, dayStart) {
+function scheduleDaySegments(schedule, dayStart, weekday) {
   const startValue = schedule.daily_start_time;
   const endValue = schedule.daily_end_time;
-  let segments = !startValue || !endValue ? [[0, 1440]] : null;
+  const selectedDays = Array.isArray(schedule.weekdays) ? schedule.weekdays.map(Number).filter(day => day >= 1 && day <= 7) : [];
+  const isSelected = day => !selectedDays.length || selectedDays.includes(day);
   const toMinutes = value => {
     const [hours, minutes] = String(value).split(':').map(Number);
     return hours * 60 + minutes;
   };
-  if (!segments) {
+  let segments;
+  if (!startValue || !endValue) {
+    segments = isSelected(weekday) ? [[0, 1440]] : [];
+  } else {
     const start = toMinutes(startValue);
     const end = toMinutes(endValue);
     if (start === end) return [];
-    segments = end > start ? [[start, end]] : [[start, 1440], [0, end]];
+    if (end > start) {
+      segments = isSelected(weekday) ? [[start, end]] : [];
+    } else {
+      const previousWeekday = weekday === 1 ? 7 : weekday - 1;
+      segments = [
+        ...(isSelected(previousWeekday) ? [[0, end]] : []),
+        ...(isSelected(weekday) ? [[start, 1440]] : [])
+      ];
+    }
   }
   const clamp = (value, fallback) => {
     if (!value) return fallback;
@@ -1184,7 +1196,7 @@ function scheduleDaySegments(schedule, dayStart) {
     .filter(([start, end]) => start < end);
 }
 
-function findScheduleConflicts(entries, dayStart) {
+function findScheduleConflicts(entries, dayStart, weekday) {
   const conflicts = new Map();
   const byScreen = new Map();
   entries.forEach(schedule => {
@@ -1199,8 +1211,8 @@ function findScheduleConflicts(entries, dayStart) {
       for (let rightIndex = leftIndex + 1; rightIndex < group.length; rightIndex++) {
         const left = group[leftIndex];
         const right = group[rightIndex];
-        const overlaps = scheduleDaySegments(left, dayStart).some(([leftStart, leftEnd]) =>
-          scheduleDaySegments(right, dayStart).some(([rightStart, rightEnd]) => leftStart < rightEnd && rightStart < leftEnd));
+        const overlaps = scheduleDaySegments(left, dayStart, weekday).some(([leftStart, leftEnd]) =>
+          scheduleDaySegments(right, dayStart, weekday).some(([rightStart, rightEnd]) => leftStart < rightEnd && rightStart < leftEnd));
         if (!overlaps) continue;
         conflicts.set(left.id, [...(conflicts.get(left.id) || []), right]);
         conflicts.set(right.id, [...(conflicts.get(right.id) || []), left]);
@@ -1246,30 +1258,34 @@ function renderChannelCalendar() {
   grid.innerHTML = days.map(day => {
     const weekday = ((day.getDay() + 6) % 7) + 1;
     const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate());
-    const dayEnd = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 59, 59, 999);
-    const entries = visibleSchedules.filter(schedule => {
-      if (Array.isArray(schedule.weekdays) && schedule.weekdays.length && !schedule.weekdays.map(Number).includes(weekday)) return false;
-      if (schedule.active_from && new Date(schedule.active_from) > dayEnd) return false;
-      if (schedule.active_until && new Date(schedule.active_until) < dayStart) return false;
-      return true;
-    }).sort((a, b) => String(a.daily_start_time || '').localeCompare(String(b.daily_start_time || '')) || Number(a.priority) - Number(b.priority));
-    const conflicts = findScheduleConflicts(entries, dayStart);
+    const entries = visibleSchedules.filter(schedule => scheduleDaySegments(schedule, dayStart, weekday).length > 0)
+      .sort((a, b) => String(a.daily_start_time || '').localeCompare(String(b.daily_start_time || '')) || Number(a.priority) - Number(b.priority));
+    const conflicts = findScheduleConflicts(entries, dayStart, weekday);
     const items = entries.map(schedule => {
       const screen = logicalScreenFor(schedule.screen_id) || screens.find(item => item.id === schedule.screen_id);
       const channel = channels.find(item => item.id === schedule.channel_id);
       if (!screen || !channel) return '';
+      const segments = scheduleDaySegments(schedule, dayStart, weekday);
+      const formatMinute = value => {
+        if (value >= 1440) return '24:00';
+        const minute = Math.floor(value);
+        return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+      };
       const time = schedule.daily_start_time && schedule.daily_end_time
-        ? `${String(schedule.daily_start_time).slice(0, 5)}–${String(schedule.daily_end_time).slice(0, 5)}`
+        ? segments.map(([segmentStart, segmentEnd]) => `${formatMinute(segmentStart)}–${formatMinute(segmentEnd)}`).join(' + ')
         : 'Hela dagen';
+      const continuesFromPreviousDay = Boolean(schedule.daily_start_time && schedule.daily_end_time
+        && String(schedule.daily_start_time).slice(0, 5) > String(schedule.daily_end_time).slice(0, 5)
+        && segments.some(([segmentStart]) => segmentStart === 0));
       const overlaps = conflicts.get(schedule.id) || [];
       const conflictNote = overlaps.map(other => {
         const otherChannel = channels.find(item => item.id === other.channel_id);
         const priority = Number(schedule.priority);
         const otherPriority = Number(other.priority);
-        const outcome = priority < otherPriority ? `prio ${priority} vinner` : priority > otherPriority ? `prio ${otherPriority} vinner` : `samma prio ${priority}; båda kan visas`;
+        const outcome = priority < otherPriority ? `prio ${priority} vinner` : priority > otherPriority ? `prio ${otherPriority} vinner` : `samma kanalprio ${priority}; TV:n använder spellistprio och ordning som utslagsregel`;
         return `Överlappar ${otherChannel?.name || 'annan kanal'} · ${outcome}`;
       }).join(' · ');
-      return `<article class="channel-calendar-event ${overlaps.length ? 'conflict' : ''}" ${overlaps.length ? 'aria-label="Schemakrock"' : ''}><strong>${esc(channel.name)}</strong><span>${esc(screen.name)}</span><small>${esc(time)} · prio ${Number(schedule.priority)}</small>${schedule.active_from || schedule.active_until ? `<small>${schedule.active_from ? calendarDateLabel(new Date(schedule.active_from)) : 'Start utan gräns'} – ${schedule.active_until ? calendarDateLabel(new Date(schedule.active_until)) : 'utan slut'}</small>` : ''}${conflictNote ? `<small class="channel-conflict-note">⚠ ${esc(conflictNote)}</small>` : ''}</article>`;
+      return `<article class="channel-calendar-event ${overlaps.length ? 'conflict' : ''}" ${overlaps.length ? 'aria-label="Schemakrock"' : ''}><strong>${esc(channel.name)}</strong><span>${esc(screen.name)}</span><small>${esc(time)}${continuesFromPreviousDay ? ' · fortsättning från föregående dag' : ''} · prio ${Number(schedule.priority)}</small>${schedule.active_from || schedule.active_until ? `<small>${schedule.active_from ? calendarDateLabel(new Date(schedule.active_from)) : 'Start utan gräns'} – ${schedule.active_until ? calendarDateLabel(new Date(schedule.active_until)) : 'utan slut'}</small>` : ''}${conflictNote ? `<small class="channel-conflict-note">⚠ ${esc(conflictNote)}</small>` : ''}</article>`;
     }).join('');
     return `<section class="channel-calendar-day ${day.toDateString() === new Date().toDateString() ? 'today' : ''}"><header><strong>${calendarDateLabel(day, { weekday: 'short' })}</strong><span>${calendarDateLabel(day, { day: 'numeric', month: 'short' })}</span></header><div class="channel-calendar-events">${items || '<span class="channel-calendar-empty">Inget kanalschema</span>'}</div></section>`;
   }).join('');
