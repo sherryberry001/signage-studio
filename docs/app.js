@@ -1023,7 +1023,7 @@ async function loadScreens() {
   }
   const duplicateNames = new Map();
   screens.forEach(screen => {
-    const key = screenProfileKey(screen);
+    const key = screenNameKey(screen);
     duplicateNames.set(key, (duplicateNames.get(key) || 0) + 1);
   });
   screenRenderData = new Map();
@@ -1033,7 +1033,7 @@ async function loadScreens() {
     const screenChannelIds = new Set(channelSchedules.filter(item => item.screen_id === screen.id).map(item => item.channel_id));
     const screenChannelPlaylistIds = new Set(channelPlaylists.filter(item => screenChannelIds.has(item.channel_id)).map(item => item.playlist_id));
     const screenChannelSlides = (channelSlideData || []).filter(item => screenChannelPlaylistIds.has(item.playlist_id));
-    const args = [screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(screenProfileKey(screen)) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides, latestPublications.get(screen.id), publicationHistory.get(screen.id) || [], (approvalData || []).filter(request => request.screen_id === screen.id)];
+    const args = [screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(screenNameKey(screen)) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides, latestPublications.get(screen.id), publicationHistory.get(screen.id) || [], (approvalData || []).filter(request => request.screen_id === screen.id)];
     screenRenderData.set(screen.id, args);
   });
   renderScreenDirectory();
@@ -1961,11 +1961,17 @@ function isOnline(screen) {
 }
 
 function screenProfileKey(screen) {
+  const identity = String(screen?.device_identity || '').trim();
+  return identity ? `device:${identity}` : `profile:${screen?.id || 'unknown'}`;
+}
+
+function screenNameKey(screen) {
   return String(screen?.name || '').trim().toLocaleLowerCase('sv-SE') || `screen-${screen?.id || 'unknown'}`;
 }
 
 function compareScreenProfiles(left, right) {
-  return Number(isOnline(right)) - Number(isOnline(left))
+  return Number(Boolean(right.is_active)) - Number(Boolean(left.is_active))
+    || Number(isOnline(right)) - Number(isOnline(left))
     || Number(Boolean(right.device_identity)) - Number(Boolean(left.device_identity))
     || Number(Boolean(left.pair_code)) - Number(Boolean(right.pair_code))
     || Number(Boolean(right.activated_at)) - Number(Boolean(left.activated_at))
@@ -2162,10 +2168,11 @@ function renderScreenDirectory() {
     const currentKind = online ? kindLabel(screen.current_kind) : 'Offline';
     const selected = screenProfileIds(screen.id).some(id => selectedScreenIds.has(id));
     const duplicateCount = screenProfileGroups().find(entries => entries.some(item => item.id === screen.id))?.length || 1;
+    const sameNameCount = screens.filter(item => screenNameKey(item) === screenNameKey(screen)).length;
     return `<article class="screen-directory-card" data-screen-id="${esc(screen.id)}" data-screen-name="${esc(screen.name || '')}" data-screen-current="${esc(screen.current_title || '')}" data-screen-status="${online ? 'online' : screen.pair_code ? 'pairing' : 'offline'}" data-screen-group="${esc(screen.group_id || '')}" data-screen-location="${esc(screen.location_id || '')}">
       <label class="screen-directory-select"><input class="screen-directory-checkbox" type="checkbox" ${selected ? 'checked' : ''} ${['admin', 'editor'].includes(currentRole) ? '' : 'disabled'} aria-label="Välj ${esc(screen.name)}" /></label>
       <button class="screen-directory-open" type="button" data-open-screen="${esc(screen.id)}" aria-label="Öppna inställningar för ${esc(screen.name)}">
-        <span class="screen-directory-icon">▣</span><span class="screen-directory-main"><strong>${esc(screen.name || 'Namnlös skärm')}</strong><small>${esc([location, group].filter(Boolean).join(' · ') || 'Ingen plats eller grupp')}${duplicateCount > 1 ? ` · ${duplicateCount - 1} äldre profil${duplicateCount > 2 ? 'er' : ''} dolda` : ''}</small></span>
+        <span class="screen-directory-icon">▣</span><span class="screen-directory-main"><strong>${esc(screen.name || 'Namnlös skärm')}</strong><small>${esc([location, group].filter(Boolean).join(' · ') || 'Ingen plats eller grupp')}${duplicateCount > 1 ? ` · ${duplicateCount - 1} profil${duplicateCount > 2 ? 'er' : ''} med samma TV-ID dolda` : ''}${sameNameCount > 1 ? ` · ${sameNameCount} profiler med samma namn` : ''}</small></span>
         <span class="screen-directory-now"><small>VISAS JUST NU</small><strong>${esc(current)}</strong><small>${esc(currentKind)}</small></span>
         <span class="screen-directory-status ${online ? 'online' : 'offline'}"><i></i>${online ? 'Online' : screen.pair_code ? 'Parkoppling' : 'Offline'}</span><span class="screen-directory-arrow">→</span>
       </button>
