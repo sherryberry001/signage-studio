@@ -25,7 +25,7 @@ När Pages-workflowen är klar finns adminvyn på `https://<github-användare>.g
 
 ## Bygg och installera TV-appen
 
-1. Hämta [senaste Signage Player APK:n](https://sherryberry001.github.io/signage-studio/signage-player-v1.6.0.apk) från GitHub Pages. APK:n byggs lokalt och följer med repots publicerade `/docs`-filer. Alternativt kör **Actions → Build Android TV player** eller bygg lokalt från `player-android/` med Android SDK 35 och JDK 25.
+1. Hämta [senaste Signage Player APK:n](https://sherryberry001.github.io/signage-studio/signage-player-v1.7.0.apk) från GitHub Pages. APK:n byggs lokalt och följer med repots publicerade `/docs`-filer. Alternativt kör **Actions → Build Android TV player** eller bygg lokalt från `player-android/` med Android SDK 35 och JDK 25.
 2. På Philips-TV:n behöver appen installeras en gång. Google Play kräver Google-inloggning; om du inte vill logga in kan APK:n sideloadas. Aktivera då utvecklaralternativ och USB-/nätverksfelsökning på TV:n och installera med Android Debug Bridge, eller kopiera APK:n via USB med en filhanterare.
 3. Starta **Signage Player**, skriv parkopplingskoden från adminvyn och låt appen gå i helskärm.
 
@@ -41,13 +41,13 @@ Bjud först in personen via Supabase Auth. Administratören kan därefter tillde
 
 ## Lägga till innehåll
 
-- **Spellistor:** skapa en spellista och tilldela den till flera skärmar. Innehåll och ordning delas mellan alla skärmar som använder den. Skärmar kan även fortsätta med en egen spellista.
+- **Spellistor:** skapa en spellista och tilldela den till flera skärmar. I Innehåll kan du centralt byta namn, se och sortera objekt, ta bort objekt och se vilka skärmar och kanaler som använder listan. Innehåll och ordning delas mellan alla anslutna skärmar.
 - **Skärmlayouter:** välj helskärm, huvudyta med ticker eller huvudyta med sidopanel. Texten eller en separat spellista i den andra zonen kan uppdateras centralt och synkas till TV:n.
 - **Kanaler:** bygg en kanal av flera återanvändbara spellistor. Varje spellista kan ha egen ordning, prioritet, datumintervall, veckodagar och dagligt tidsfönster; schemalägg sedan kanalen på en eller flera skärmar. TV:n väljer aktiv kanal och spellista lokalt från synkat innehåll, även när nätet är nere; utan aktiv kanal används skärmens grundspellista.
 - **Fjärråtgärder:** köa omedelbar synk eller omstart för en specifik spelare. Offline-spelare hämtar kommandot när de återansluter, och kommandot kvitteras i en historiktabell.
 - **Textmeddelande:** skriv rubrik/text, välj sekunder och ange valfritt datumintervall, veckodagar och dagliga klockslag. Veckodagar och tider följer TV:ns lokala tidszon; ett klockslag som går över midnatt räknas till dagen då visningsfönstret startar.
 - **Video:** ange en direktlänk eller ladda upp en MP4. Uppladdade videor ligger i en publik bucket eftersom TV:n ska kunna spela dem utan användarinloggning. Publicera därför bara innehåll som får visas offentligt.
-- **JSON-feed och integrationer:** länken ska returnera ett JSON-objekt, till exempel `{"message":"Besöksmottagningen flyttar till entré B"}`. Spelaren sparar senaste svaret offline. Dizparc Pulse kan visas som en native live-panel med kunder, enheter, larm, hälsa och patchstatus; en Pulse-displaynyckel anges som URL-fragment `#token=…` och skickas av spelaren som HTTP-header.
+- **JSON-feed och integrationer:** länken ska returnera JSON. Enkla svar med `message` visas som text; svar med `metrics` eller `items` kan visas som ett native dashboard på TV:n. Strukturerat format: `{"format":"signage-dashboard-v1","title":"Driftläge","updated_at":"2026-10-21T12:30:00Z","metrics":[{"label":"Online","value":"42/45","detail":"93%"}],"items":[{"title":"Kund A","subtitle":"3 enheter online","status":"OK"}]}`. Feeden hämtas utan HTTP-cache när objektet spelas och senaste giltiga svaret sparas för offlinevisning. Ange visningstiden på feed-objektet för att styra uppdateringsintervallet. Dizparc Pulse har en separat native live-panel; dess displaynyckel anges som URL-fragment `#token=…` och skickas av spelaren som HTTP-header.
 - **Klocka & datum:** visas enligt TV:ns lokala tid.
 
 TV:n läser senaste spellistan från backend och använder lokala kopior för offlinevisning. För att byta vilken skärm TV:n visar, ta bort appens data eller koppla bort skärmen i adminvyn och aktivera den på nytt.

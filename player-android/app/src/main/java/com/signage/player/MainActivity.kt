@@ -488,6 +488,7 @@ class MainActivity : Activity() {
                         val connection = URL(source.substringBefore('#')).openConnection().apply {
                             connectTimeout = 8_000
                             readTimeout = 8_000
+                            useCaches = false
                             setRequestProperty("Cache-Control", "no-cache, no-store, max-age=0")
                             if (token != null) setRequestProperty("x-pulse-display-token", token)
                         }
@@ -746,6 +747,7 @@ class MainActivity : Activity() {
                 val displayToken = Uri.parse(source).fragment?.removePrefix("token=")?.takeIf { it.isNotBlank() }
                 val fresh = URL(source.substringBefore('#')).openConnection().run {
                     connectTimeout = 8_000; readTimeout = 8_000
+                    useCaches = false
                     setRequestProperty("Cache-Control", "no-cache, no-store, max-age=0")
                     setRequestProperty("Pragma", "no-cache")
                     if (displayToken != null) setRequestProperty("x-pulse-display-token", displayToken)
@@ -761,16 +763,132 @@ class MainActivity : Activity() {
                     val payload = raw?.let { runCatching { JSONObject(it) }.getOrNull() }
                     if (payload?.optString("format") == "dizparc-pulse-signage") {
                         showPulseDashboard(item, payload)
+                    } else if (payload != null && isStructuredDashboard(payload)) {
+                        showStructuredDashboard(item, payload)
                     } else {
                         showText(title.ifBlank { "Informationsflöde" }, raw?.let(::renderFeed) ?: "Ingen feed kunde hämtas.")
                     }
                     currentTitle = title.ifBlank { "Informationsflöde" }
-                    currentBody = if (payload?.optString("format") == "dizparc-pulse-signage") "Pulse liveöversikt" else raw?.let(::renderFeed).orEmpty()
+                    currentBody = when {
+                        payload?.optString("format") == "dizparc-pulse-signage" -> "Pulse liveöversikt"
+                        payload != null && isStructuredDashboard(payload) -> "Live-dashboard"
+                        else -> raw?.let(::renderFeed).orEmpty()
+                    }
                     reportHeartbeat(item, title.ifBlank { "Informationsflöde" }, currentBody, "feed", source)
                     applyMultiZoneLayout(item)
                 }
             }
         }
+    }
+
+    private fun isStructuredDashboard(payload: JSONObject): Boolean =
+        payload.optString("format") == "signage-dashboard-v1"
+            || payload.has("metrics")
+            || payload.has("items")
+            || payload.has("alerts")
+
+    private fun feedValue(item: JSONObject, vararg keys: String): String {
+        for (key in keys) {
+            val value = item.opt(key) ?: continue
+            if (value == JSONObject.NULL) continue
+            val text = value.toString().trim()
+            if (text.isNotEmpty() && text != "null") return text
+        }
+        return ""
+    }
+
+    private fun showStructuredDashboard(item: JSONObject, payload: JSONObject) {
+        root.removeAllViews()
+        val background = Color.rgb(12, 18, 28)
+        val panelColor = Color.rgb(26, 36, 51)
+        val accent = Color.rgb(183, 243, 106)
+        val white = Color.WHITE
+        val muted = Color.rgb(166, 178, 196)
+        val generatedAt = feedValue(payload, "updated_at", "generated_at", "timestamp")
+        val age = runCatching { java.time.Duration.between(Instant.parse(generatedAt), Instant.now()).seconds.coerceAtLeast(0) }.getOrNull()
+        val stale = age?.let { it > 120 } ?: false
+        val page = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(36, 26, 36, 24)
+            setBackgroundColor(background)
+        }
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val heading = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        heading.addView(label(feedValue(payload, "title").ifBlank { item.optString("title").ifBlank { "Live-dashboard" } }, 30, white, true).apply { gravity = Gravity.LEFT })
+        val subtitle = feedValue(payload, "subtitle", "message")
+        if (subtitle.isNotBlank()) heading.addView(label(subtitle, 15, muted, false).apply { gravity = Gravity.LEFT; setPadding(0, 4, 0, 0) })
+        header.addView(heading, LinearLayout.LayoutParams(0, -2, 1f))
+        val liveLabel = when {
+            age == null -> "UPPDATERING OKÄND"
+            stale -> "GAMLA DATA · ${age.div(60)} MIN"
+            else -> "LIVE · ${generatedAt.take(16).replace('T', ' ')}"
+        }
+        header.addView(label(liveLabel, 13, if (stale) Color.rgb(255, 194, 14) else accent, true))
+        page.addView(header, LinearLayout.LayoutParams(-1, 76))
+
+        val metrics = payload.optJSONArray("metrics") ?: JSONArray()
+        if (metrics.length() > 0) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 14, 0, 20) }
+            for (index in 0 until minOf(metrics.length(), 6)) {
+                val metric = metrics.optJSONObject(index) ?: continue
+                val card = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(16, 12, 16, 12)
+                    setBackgroundColor(panelColor)
+                }
+                card.addView(label(feedValue(metric, "label", "title", "name").ifBlank { "MÄTVÄRDE" }.uppercase(java.util.Locale("sv", "SE")), 12, muted, true).apply { gravity = Gravity.LEFT; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+                card.addView(label(feedValue(metric, "value", "text").ifBlank { "–" }, 29, white, true).apply { gravity = Gravity.LEFT; setPadding(0, 5, 0, 0); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+                val detail = feedValue(metric, "detail", "trend", "subtitle")
+                if (detail.isNotBlank()) card.addView(label(detail, 12, muted, false).apply { gravity = Gravity.LEFT; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+                row.addView(card, LinearLayout.LayoutParams(0, 104, 1f).apply { if (index < minOf(metrics.length(), 6) - 1) rightMargin = 10 })
+            }
+            page.addView(row, LinearLayout.LayoutParams(-1, 126))
+        }
+
+        val entries = payload.optJSONArray("items") ?: payload.optJSONArray("alerts") ?: payload.optJSONArray("rows") ?: JSONArray()
+        if (entries.length() > 0) {
+            val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(16, 13, 16, 13); setBackgroundColor(panelColor) }
+            val listTitle = feedValue(payload, "items_title", "section_title").ifBlank { "AKTUELLT" }
+            list.addView(label(listTitle.uppercase(java.util.Locale("sv", "SE")), 13, accent, true).apply { gravity = Gravity.LEFT; setPadding(0, 0, 0, 5) })
+            for (index in 0 until minOf(entries.length(), 8)) {
+                val entry = entries.optJSONObject(index) ?: continue
+                val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, 8, 0, 8) }
+                val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                details.addView(label(feedValue(entry, "title", "name", "label").ifBlank { "Post ${index + 1}" }, 17, white, true).apply { gravity = Gravity.LEFT; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+                val description = feedValue(entry, "subtitle", "description", "organization_name", "detail")
+                if (description.isNotBlank()) details.addView(label(description, 13, muted, false).apply { gravity = Gravity.LEFT; setPadding(0, 2, 0, 0); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+                line.addView(details, LinearLayout.LayoutParams(0, -2, 1f))
+                val status = feedValue(entry, "status", "severity", "value")
+                if (status.isNotBlank()) {
+                    val normalized = status.lowercase(java.util.Locale.ROOT)
+                    val color = when {
+                        listOf("critical", "error", "offline", "failed", "kritisk", "fel").any(normalized::contains) -> Color.rgb(255, 128, 128)
+                        listOf("warning", "pending", "varning", "väntar").any(normalized::contains) -> Color.rgb(255, 194, 14)
+                        listOf("online", "healthy", "ok", "success", "frisk").any(normalized::contains) -> accent
+                        else -> white
+                    }
+                    line.addView(label(status, 14, color, true).apply { gravity = Gravity.RIGHT })
+                }
+                list.addView(line)
+                if (index < minOf(entries.length(), 8) - 1) list.addView(View(this).apply { setBackgroundColor(Color.rgb(57, 68, 84)) }, LinearLayout.LayoutParams(-1, 1))
+            }
+            val scroll = android.widget.ScrollView(this).apply { isFillViewport = false; addView(list) }
+            page.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        } else if (metrics.length() == 0) {
+            val message = feedValue(payload, "message", "value", "text")
+            page.addView(label(message.ifBlank { "Feeden är ansluten men innehåller inga mätvärden ännu." }, 21, white, false).apply {
+                gravity = Gravity.CENTER
+                setPadding(24, 24, 24, 24)
+            }, LinearLayout.LayoutParams(-1, 0, 1f))
+        }
+
+        page.addView(label("Senast hämtad från källan · skärmen uppdaterar feeden automatiskt", 11, muted, false).apply { gravity = Gravity.LEFT }, LinearLayout.LayoutParams(-1, 32))
+        root.addView(page, FrameLayout.LayoutParams(-1, -1))
     }
 
     private fun showPulseDashboard(item: JSONObject, payload: JSONObject) {
