@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261031-live-preview" />
-    <script type="module" src="./app.js?v=20261031-live-preview"></script>
+    <link rel="stylesheet" href="./style.css?v=20261101-playback-history" />
+    <script type="module" src="./app.js?v=20261101-playback-history"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -48,6 +48,7 @@
           <button class="workspace-tab active" type="button" data-workspace="screens" aria-current="page"><span>▣</span> Skärmar</button>
           <button class="workspace-tab" type="button" data-workspace="content"><span>▤</span> Innehåll</button>
           <button class="workspace-tab" type="button" data-workspace="channels"><span>◷</span> Kanaler</button>
+          <button class="workspace-tab" type="button" data-workspace="proof"><span>▤</span> Uppspelning</button>
           <button class="workspace-tab" type="button" data-workspace="team"><span>♧</span> Team</button>
           <button class="workspace-tab admin-only" type="button" data-workspace="activity"><span>◷</span> Aktivitet</button>
         </nav>
@@ -91,6 +92,12 @@
           <div class="activity-heading"><div><strong>Organisationsaktivitet</strong><span>Ändringar i skärmar, innehåll, scheman, team och fjärrkommandon. Värden från innehållet loggas inte.</span></div><button id="refreshActivity" class="button ghost small" type="button">↻ Uppdatera</button></div>
           <div class="activity-tools"><input id="activitySearch" type="search" placeholder="Sök person eller post…" aria-label="Sök aktivitet" /><select id="activityFilter" aria-label="Filtrera aktivitet"><option value="all">Alla händelser</option><option value="screens">Skärmar</option><option value="slides">Innehåll</option><option value="playlists">Spellistor</option><option value="channels">Kanaler & scheman</option><option value="team">Team & åtkomst</option><option value="screen_commands">Spelarkommandon</option></select></div>
           <div id="activityList" class="activity-list" aria-live="polite"></div>
+        </section>
+        <section id="playbackPanel" class="activity-panel hidden" data-workspace-panel="proof">
+          <div class="activity-heading"><div><strong>Uppspelningshistorik</strong><span>Spelaren rapporterar när den byter innehåll. Tiderna visar rapporterade övergångar och uppskattad visningstid.</span></div><div class="playback-actions"><button id="exportPlayback" class="button ghost small" type="button">Exportera CSV</button><button id="refreshPlayback" class="button ghost small" type="button">↻ Uppdatera</button></div></div>
+          <div class="activity-tools playback-tools"><label>Från <input id="playbackFrom" type="date" /></label><label>Till <input id="playbackTo" type="date" /></label><select id="playbackScreen" aria-label="Filtrera skärm"><option value="all">Alla tillgängliga skärmar</option></select><input id="playbackSearch" type="search" placeholder="Sök innehåll eller skärm…" aria-label="Sök uppspelning" /></div>
+          <div id="playbackSummary" class="playback-summary"></div>
+          <div id="playbackList" class="activity-list" aria-live="polite"></div>
         </section>
         <div id="screenList" class="screen-list" data-workspace-panel="screens"></div>
         <div id="emptyState" class="empty-state hidden" data-workspace-panel="screens"><div class="empty-icon">▣</div><h2>Din första skärm börjar här</h2><p>Skapa en skärm, koppla TV-appen med parkopplingskoden och lägg till ditt första innehåll.</p></div>

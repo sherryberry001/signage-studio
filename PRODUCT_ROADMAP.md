@@ -19,7 +19,7 @@ Signage Studio should cover the core jobs handled by mature digital-signage plat
 | Live data and apps | Native Pulse/JSON feed and web dashboard support | Integration catalog and credential-safe connectors with refresh/health indicators |
 | Remote screen operations | Set content, temporary cast, sync and restart | Screenshot refresh on demand, remote settings, support bundle, actionable alerts |
 | Team and organization | Roles, screen groups, group-scoped access, audit log | Spaces/locations, granular content permissions, invitations and activity export |
-| Playback reporting | Current slide and heartbeat | Proof-of-play event ingestion, per-screen/content playback history and CSV reports |
+| Playback reporting | Reported player content transitions, per-screen history, estimated display duration, filters and CSV export | Aggregated proof-of-play analytics, per-content totals and scheduled reports |
 | Player fleet | Android TV player, offline cache and autostart | Managed kiosk mode, player update channel, compatibility matrix and recovery workflow |
 | Creation tools | Structured text and feed presentation | Template-based canvas/editor and reusable branded layouts |
 
@@ -37,5 +37,6 @@ Signage Studio should cover the core jobs handled by mature digital-signage plat
 - One physical player should map to one screen record; pairing and recovery must preserve that record.
 - A screen should always identify the active channel/playlist/item and the time of its last successful heartbeat.
 - Publishing must distinguish saved drafts from content actually acknowledged by a player.
+- Playback history records what the player reports; it must not claim independent visual verification of the TV panel.
 - Native feeds should refresh without browser-cache dependence and keep the last valid result for offline use.
 - Player-facing secrets stay server-side; team access is enforced in the database.

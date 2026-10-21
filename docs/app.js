@@ -20,6 +20,7 @@ let teamMembers = [];
 let screenCommands = [];
 let mediaLibrary = [];
 let activityLog = [];
+let playbackEvents = [];
 let currentRole = null;
 let statusTimer = null;
 let activityTimer = null;
@@ -31,6 +32,7 @@ const workspaceDetails = {
   screens: ['Skärmar', 'Övervaka anslutning, innehåll och status för dina skärmar.'],
   content: ['Innehåll', 'Hantera återanvändbara spellistor och innehållsbiblioteket.'],
   channels: ['Kanaler', 'Planera vad som ska visas, när det ska visas och på vilka skärmar.'],
+  proof: ['Uppspelning', 'Följ rapporterade innehållsbyten per skärm och exportera uppspelningshistorik.'],
   team: ['Team', 'Hantera personer och åtkomst till Signage Studio.'],
   activity: ['Aktivitet', 'Följ ändringar och fjärråtgärder i Signage Studio.']
 };
@@ -64,6 +66,7 @@ function setWorkspace(workspace) {
     loadActivityLog();
     activityTimer = setInterval(loadActivityLog, 15000);
   }
+  if (workspace === 'proof') loadPlaybackEvents();
 }
 
 setWorkspace('screens');
@@ -87,6 +90,11 @@ function toast(message, isError = false) {
 
 function esc(value = '') {
   return String(value).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]);
+}
+
+function localDateInput(date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
 }
 
 function shortCode() {
@@ -317,6 +325,14 @@ $('#mediaSearch').addEventListener('input', renderMediaLibrary);
 $('#activitySearch').addEventListener('input', renderActivityLog);
 $('#activityFilter').addEventListener('change', renderActivityLog);
 $('#refreshActivity').addEventListener('click', loadActivityLog);
+$('#refreshPlayback').addEventListener('click', loadPlaybackEvents);
+$('#playbackFrom').value = localDateInput(new Date(Date.now() - 6 * 86400000));
+$('#playbackTo').value = localDateInput(new Date());
+$('#playbackFrom').addEventListener('change', loadPlaybackEvents);
+$('#playbackTo').addEventListener('change', loadPlaybackEvents);
+$('#playbackScreen').addEventListener('change', loadPlaybackEvents);
+$('#playbackSearch').addEventListener('input', renderPlaybackEvents);
+$('#exportPlayback').addEventListener('click', exportPlaybackEvents);
 
 $('#mediaLibraryForm [name="kind"]').addEventListener('change', event => {
   const form = $('#mediaLibraryForm');
@@ -437,6 +453,7 @@ async function loadScreens() {
   ));
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   screens = nextScreens;
+  renderPlaybackScreenOptions();
   screenGroups = nextScreenGroups;
   screenGroupMembers = groupMemberData || [];
   playlists = nextPlaylists;
@@ -775,6 +792,72 @@ async function loadActivityLog() {
   if (error) return toast(error.message, true);
   activityLog = data || [];
   renderActivityLog();
+}
+
+function renderPlaybackScreenOptions() {
+  const select = $('#playbackScreen');
+  if (!select) return;
+  const previous = select.value || 'all';
+  select.innerHTML = `<option value="all">Alla tillgängliga skärmar</option>${screens.map(screen => `<option value="${esc(screen.id)}">${esc(screen.name)}</option>`).join('')}`;
+  select.value = screens.some(screen => screen.id === previous) ? previous : 'all';
+}
+
+function filteredPlaybackEvents() {
+  const search = ($('#playbackSearch')?.value || '').trim().toLocaleLowerCase('sv-SE');
+  return playbackEvents.filter(event => !search || `${event.screen_name} ${event.content_title} ${event.content_kind || ''}`.toLocaleLowerCase('sv-SE').includes(search));
+}
+
+function renderPlaybackEvents() {
+  const list = $('#playbackList');
+  if (!list) return;
+  const rows = filteredPlaybackEvents();
+  const screenCount = new Set(rows.map(event => event.screen_id || event.screen_name)).size;
+  const completedMs = rows.reduce((total, event) => total + (event.ended_at ? Math.max(0, new Date(event.ended_at) - new Date(event.started_at)) : 0), 0);
+  $('#playbackSummary').innerHTML = `<span><strong>${rows.length}</strong> övergångar</span><span><strong>${screenCount}</strong> skärmar</span><span><strong>${Math.round(completedMs / 60000)}</strong> min registrerad visningstid</span>`;
+  if (!rows.length) {
+    list.innerHTML = `<div class="activity-empty">${playbackEvents.length ? 'Inget matchar filtren.' : 'Ingen uppspelningshistorik under perioden. Spelaren rapporterar första posten när den byter innehåll.'}</div>`;
+    return;
+  }
+  const date = value => new Intl.DateTimeFormat('sv-SE', { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value));
+  const duration = event => {
+    if (!event.ended_at) return 'Pågår';
+    const seconds = Math.max(0, Math.round((new Date(event.ended_at) - new Date(event.started_at)) / 1000));
+    return seconds >= 3600 ? `${Math.floor(seconds / 3600)} h ${Math.floor(seconds % 3600 / 60)} min` : `${Math.floor(seconds / 60)} min ${seconds % 60} sek`;
+  };
+  list.innerHTML = `<div class="activity-table playback-table" role="table" aria-label="Uppspelningshistorik"><div class="activity-table-head" role="row"><span>Tid</span><span>Skärm</span><span>Innehåll</span><span>Rapporterad visning</span></div>${rows.map(event => `<div class="activity-row" role="row"><time datetime="${esc(event.started_at)}">${esc(date(event.started_at))}</time><span>${esc(event.screen_name)}</span><span><strong>${esc(event.content_title)}</strong><small>${esc(event.content_kind || 'innehåll')}</small></span><span>${esc(duration(event))}</span></div>`).join('')}</div>`;
+}
+
+async function loadPlaybackEvents() {
+  if (!currentRole) return;
+  const from = $('#playbackFrom').value;
+  const to = $('#playbackTo').value;
+  if (!from || !to || from > to) return toast('Välj ett giltigt datumintervall.', true);
+  const start = new Date(`${from}T00:00:00`).toISOString();
+  const end = new Date(new Date(`${to}T00:00:00`).getTime() + 86400000).toISOString();
+  let query = supabase.from('playback_events')
+    .select('id,screen_id,screen_name,content_title,content_kind,started_at,ended_at')
+    .gte('started_at', start).lt('started_at', end)
+    .order('started_at', { ascending: false }).order('id', { ascending: false }).limit(1000);
+  const screenId = $('#playbackScreen').value;
+  if (screenId !== 'all') query = query.eq('screen_id', screenId);
+  const { data, error } = await query;
+  if (error) return toast(error.message, true);
+  playbackEvents = data || [];
+  renderPlaybackEvents();
+}
+
+function exportPlaybackEvents() {
+  const rows = filteredPlaybackEvents();
+  if (!rows.length) return toast('Det finns inga rader att exportera.', true);
+  const quote = value => `"${String(value ?? '').replaceAll('"', '""')}"`;
+  const csv = [['Tid', 'Skärm', 'Innehåll', 'Typ', 'Visning slut'], ...rows.map(event => [event.started_at, event.screen_name, event.content_title, event.content_kind, event.ended_at || 'Pågår'])]
+    .map(row => row.map(quote).join(',')).join('\r\n');
+  const url = URL.createObjectURL(new Blob(['\ufeff', csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `uppspelning-${localDateInput(new Date())}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function isOnline(screen) {
