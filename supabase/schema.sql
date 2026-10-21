@@ -12,7 +12,7 @@ create table if not exists public.playlists (
 
 create table if not exists public.media_library (
   id uuid primary key default gen_random_uuid(),
-  kind text not null check (kind in ('text', 'video', 'feed', 'web', 'clock')),
+  kind text not null check (kind in ('text', 'image', 'video', 'feed', 'web', 'clock')),
   title text not null check (char_length(title) between 1 and 120),
   body text not null default '',
   source_url text,
@@ -150,7 +150,7 @@ create table if not exists public.slides (
   id uuid primary key default gen_random_uuid(),
   screen_id uuid references public.screens(id) on delete set null,
   playlist_id uuid references public.playlists(id) on delete cascade,
-  kind text not null check (kind in ('text', 'video', 'clock', 'feed', 'web')),
+  kind text not null check (kind in ('text', 'image', 'video', 'clock', 'feed', 'web')),
   title text not null default '',
   body text not null default '',
   source_url text,
@@ -239,7 +239,7 @@ begin
 end;
 $$;
 alter table public.slides drop constraint if exists slides_kind_check;
-alter table public.slides add constraint slides_kind_check check (kind in ('text', 'video', 'clock', 'feed', 'web'));
+alter table public.slides add constraint slides_kind_check check (kind in ('text', 'image', 'video', 'clock', 'feed', 'web'));
 alter table public.screens drop constraint if exists screens_forced_slide_id_fkey;
 alter table public.screens add constraint screens_forced_slide_id_fkey
   foreign key (forced_slide_id) references public.slides(id) on delete set null;
@@ -610,7 +610,7 @@ grant execute on function public.player_heartbeat(uuid, uuid, text, text, text, 
 -- Public bucket: signage media is intentionally visible on the TV.
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('signage-assets', 'signage-assets', true, 419430400,
-  array['video/mp4','video/webm','video/quicktime','application/vnd.apple.mpegurl','application/x-mpegURL'])
+  array['image/jpeg','image/png','image/webp','video/mp4','video/webm','video/quicktime','application/vnd.apple.mpegurl','application/x-mpegURL'])
 on conflict (id) do update set public = true, file_size_limit = 419430400,
   allowed_mime_types = excluded.allowed_mime_types;
 

@@ -319,7 +319,15 @@ $('#activityFilter').addEventListener('change', renderActivityLog);
 $('#refreshActivity').addEventListener('click', loadActivityLog);
 
 $('#mediaLibraryForm [name="kind"]').addEventListener('change', event => {
-  $('#mediaLibraryForm .feed-refresh-setting').classList.toggle('hidden', event.target.value !== 'feed');
+  const form = $('#mediaLibraryForm');
+  const kind = event.target.value;
+  form.querySelector('.feed-refresh-setting').classList.toggle('hidden', kind !== 'feed');
+  const fileInput = form.querySelector('[name="file"]');
+  fileInput.accept = kind === 'image'
+    ? 'image/jpeg,image/png,image/webp'
+    : kind === 'video' ? 'video/mp4,video/webm,video/quicktime' : '';
+  form.querySelector('.file-label').classList.toggle('hidden', !['image', 'video'].includes(kind));
+  form.querySelector('.file-label').firstChild.textContent = kind === 'image' ? 'Bildfil (valfritt) ' : 'Videofil (valfritt) ';
 });
 
 $('#mediaLibraryForm').addEventListener('submit', async event => {
@@ -331,15 +339,17 @@ $('#mediaLibraryForm').addEventListener('submit', async event => {
   let source_url = String(values.get('source_url') || '').trim();
   const file = values.get('file');
   if (file instanceof File && file.size > 0) {
-    if (kind !== 'video') return toast('Filer i biblioteket stöds just nu för video.', true);
-    if (file.size > 400 * 1024 * 1024) return toast('Videofilen får vara högst 400 MB.', true);
+    if (!['image', 'video'].includes(kind)) return toast('Välj bild eller video för att ladda upp en fil.', true);
+    const maxBytes = kind === 'image' ? 30 * 1024 * 1024 : 400 * 1024 * 1024;
+    if (file.size > maxBytes) return toast(kind === 'image' ? 'Bildfilen får vara högst 30 MB.' : 'Videofilen får vara högst 400 MB.', true);
+    if (kind === 'image' && !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return toast('Bilder ska vara JPEG, PNG eller WebP.', true);
     const path = `library/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     const { error: uploadError } = await supabase.storage.from('signage-assets').upload(path, file, { cacheControl: '0', upsert: false });
     if (uploadError) return toast(uploadError.message, true);
     source_url = supabase.storage.from('signage-assets').getPublicUrl(path).data.publicUrl;
   }
   const body = String(values.get('body') || '').trim();
-  if (['web', 'feed', 'video'].includes(kind) && !/^https?:\/\//i.test(source_url)) return toast('Ange en giltig HTTP- eller HTTPS-källa.', true);
+  if (['web', 'feed', 'image', 'video'].includes(kind) && !/^https?:\/\//i.test(source_url)) return toast('Ange en giltig HTTP- eller HTTPS-källa eller välj en fil.', true);
   if (kind === 'text' && !body) return toast('Skriv texten som ska sparas i biblioteket.', true);
   const tags = [...new Set(String(values.get('tags') || '').split(',').map(tag => tag.trim().toLocaleLowerCase('sv-SE')).filter(Boolean))];
   const refresh_interval_seconds = kind === 'feed' ? Number(values.get('refresh_interval_seconds') || 30) : 30;
@@ -570,7 +580,7 @@ function renderPlaylistLibrary() {
     const channelCount = channelPlaylists.filter(item => item.playlist_id === playlist.id).length;
     const card = document.createElement('article');
     card.className = 'playlist-manage-card';
-    card.innerHTML = `<div class="playlist-manage-heading"><div><span class="section-kicker">SPELLISTA · ${items.length} OBJEKT</span><form class="playlist-name-form" data-playlist-name="${esc(playlist.id)}"><input name="name" maxlength="80" value="${esc(playlist.name)}" aria-label="Spellistans namn" ${canEdit ? '' : 'disabled'} /><button class="button ghost small" type="submit" ${canEdit ? '' : 'disabled'}>Spara namn</button></form><span>${screenCount} skärmar · ${channelCount} kanaler använder listan</span></div><button class="button ghost small playlist-delete" type="button" data-playlist-delete="${esc(playlist.id)}" ${!canEdit || screenCount > 0 || channelCount > 0 ? 'disabled' : ''} title="${screenCount || channelCount ? 'Ta först bort listan från skärmar och kanaler.' : 'Ta bort tomma eller oanvända spellistor.'}">Ta bort</button></div><div class="playlist-manage-items">${items.map((item, index) => `<div class="playlist-manage-item"><div class="slide-thumb">${item.kind === 'video' ? '▶' : item.kind === 'feed' || item.kind === 'web' ? '↗' : item.kind === 'clock' ? '◷' : 'T'}</div><div class="playlist-manage-copy"><strong>${esc(item.title || kindLabel(item.kind))}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s</span></div><div class="playlist-manage-actions"><button class="icon-button" type="button" data-playlist-item-action="up" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === 0 ? 'disabled' : ''} aria-label="Flytta upp">↑</button><button class="icon-button" type="button" data-playlist-item-action="down" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === items.length - 1 ? 'disabled' : ''} aria-label="Flytta ned">↓</button><button class="icon-button delete" type="button" data-playlist-item-action="delete" data-playlist-item-id="${esc(item.id)}" ${!canEdit ? 'disabled' : ''} aria-label="Ta bort från spellistan">×</button></div></div>`).join('') || '<div class="playlist-manage-empty">Spellistan är tom. Lägg till publicerat material från biblioteket nedan.</div>'}</div>`;
+    card.innerHTML = `<div class="playlist-manage-heading"><div><span class="section-kicker">SPELLISTA · ${items.length} OBJEKT</span><form class="playlist-name-form" data-playlist-name="${esc(playlist.id)}"><input name="name" maxlength="80" value="${esc(playlist.name)}" aria-label="Spellistans namn" ${canEdit ? '' : 'disabled'} /><button class="button ghost small" type="submit" ${canEdit ? '' : 'disabled'}>Spara namn</button></form><span>${screenCount} skärmar · ${channelCount} kanaler använder listan</span></div><button class="button ghost small playlist-delete" type="button" data-playlist-delete="${esc(playlist.id)}" ${!canEdit || screenCount > 0 || channelCount > 0 ? 'disabled' : ''} title="${screenCount || channelCount ? 'Ta först bort listan från skärmar och kanaler.' : 'Ta bort tomma eller oanvända spellistor.'}">Ta bort</button></div><div class="playlist-manage-items">${items.map((item, index) => `<div class="playlist-manage-item"><div class="slide-thumb">${item.kind === 'image' ? '▧' : item.kind === 'video' ? '▶' : item.kind === 'feed' || item.kind === 'web' ? '↗' : item.kind === 'clock' ? '◷' : 'T'}</div><div class="playlist-manage-copy"><strong>${esc(item.title || kindLabel(item.kind))}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s</span></div><div class="playlist-manage-actions"><button class="icon-button" type="button" data-playlist-item-action="up" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === 0 ? 'disabled' : ''} aria-label="Flytta upp">↑</button><button class="icon-button" type="button" data-playlist-item-action="down" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === items.length - 1 ? 'disabled' : ''} aria-label="Flytta ned">↓</button><button class="icon-button delete" type="button" data-playlist-item-action="delete" data-playlist-item-id="${esc(item.id)}" ${!canEdit ? 'disabled' : ''} aria-label="Ta bort från spellistan">×</button></div></div>`).join('') || '<div class="playlist-manage-empty">Spellistan är tom. Lägg till publicerat material från biblioteket nedan.</div>'}</div>`;
     return card;
   }));
   if (!playlists.length) container.innerHTML = '<div class="playlist-manage-empty">Skapa en spellista för att samla innehåll och återanvända den på flera skärmar eller i kanaler.</div>';
@@ -645,7 +655,7 @@ function renderMediaLibrary() {
     const title = String(values.get('title') || '').trim();
     const source_url = String(values.get('source_url') || '').trim();
     const body = String(values.get('body') || '').trim();
-    if (['web', 'feed', 'video'].includes(asset.kind) && !/^https?:\/\//i.test(source_url)) return toast('Ange en giltig HTTP- eller HTTPS-källa.', true);
+    if (['web', 'feed', 'image', 'video'].includes(asset.kind) && !/^https?:\/\//i.test(source_url)) return toast('Ange en giltig HTTP- eller HTTPS-källa.', true);
     if (asset.kind === 'text' && !body) return toast('Textinnehållet får inte vara tomt.', true);
     const tags = [...new Set(String(values.get('tags') || '').split(',').map(tag => tag.trim().toLocaleLowerCase('sv-SE')).filter(Boolean))];
     const refresh_interval_seconds = asset.kind === 'feed' ? Number(values.get('refresh_interval_seconds')) : asset.refresh_interval_seconds || 30;
@@ -934,7 +944,7 @@ async function refreshScreenStatus() {
 }
 
 function kindLabel(kind) {
-  return ({ text: 'Textmeddelande', video: 'Video', clock: 'Klocka & datum', feed: 'JSON-feed', web: 'Webbsida / live dashboard', sleep: 'Utanför öppettider', paused: 'Pausad' })[kind] || kind || '—';
+  return ({ text: 'Textmeddelande', image: 'Bild', video: 'Video', clock: 'Klocka & datum', feed: 'JSON-feed', web: 'Webbsida / live dashboard', sleep: 'Utanför öppettider', paused: 'Pausad' })[kind] || kind || '—';
 }
 
 function formatCommandStatus(command) {
@@ -958,7 +968,12 @@ function updateCurrentPreview(container, screen, online) {
     container.textContent = 'Ingen signal från spelaren';
     return;
   }
-  if (screen.current_kind === 'web' && /^https?:\/\//i.test(screen.current_source_url || '')) {
+  if (screen.current_kind === 'image' && /^https?:\/\//i.test(screen.current_source_url || '')) {
+    const image = document.createElement('img');
+    image.src = screen.current_source_url;
+    image.alt = screen.current_title || 'Bild på skärmen';
+    container.append(image);
+  } else if (screen.current_kind === 'web' && /^https?:\/\//i.test(screen.current_source_url || '')) {
     const frame = document.createElement('iframe');
     frame.src = screen.current_source_url;
     frame.title = `Förhandsvisning: ${screen.current_title || 'webbsida'}`;
@@ -1018,10 +1033,10 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
       <div class="player-operations ${canEdit ? '' : 'hidden'}"><div><strong>Fjärråtgärder</strong><span class="player-command-status" data-command-status>${esc(formatCommandStatus(latestCommand))}</span></div><div class="player-operation-buttons"><button class="button ghost small" data-player-command="sync_now">Synka nu</button><button class="button ghost small" data-player-command="restart_player">Starta om spelaren</button></div></div>
       <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id && canEdit ? '' : 'hidden'}">Återgå till spellistan</button></div>
       <div class="playlist">${slides.map((slide, index) => renderSlide(slide, index, slides.length, canEdit)).join('') || '<div class="slide-sub">Spellistan är tom. Lägg till ett objekt nedan.</div>'}</div>
-      ${channelSlides.length ? `<details class="screen-channel-content"><summary>Innehåll från skärmens kanaler · ${channelSlides.length} objekt</summary><div class="playlist">${channelSlides.map(slide => `<div class="slide-row"><div class="slide-thumb">${slide.kind === 'video' ? '▶' : slide.kind === 'feed' || slide.kind === 'web' ? '↗' : slide.kind === 'clock' ? '◷' : 'T'}</div><div><div class="slide-title">${esc(slide.title || kindLabel(slide.kind))}</div><div class="slide-sub">${esc(kindLabel(slide.kind))} · ${esc(playlists.find(item => item.id === slide.playlist_id)?.name || 'spellista')}</div></div><div class="slide-buttons"><button class="button ghost small channel-show-now" data-id="${esc(slide.id)}" ${canEdit ? '' : 'hidden'}>Visa nu</button></div></div>`).join('')}</div></details>` : ''}
+      ${channelSlides.length ? `<details class="screen-channel-content"><summary>Innehåll från skärmens kanaler · ${channelSlides.length} objekt</summary><div class="playlist">${channelSlides.map(slide => `<div class="slide-row"><div class="slide-thumb">${slide.kind === 'image' ? '▧' : slide.kind === 'video' ? '▶' : slide.kind === 'feed' || slide.kind === 'web' ? '↗' : slide.kind === 'clock' ? '◷' : 'T'}</div><div><div class="slide-title">${esc(slide.title || kindLabel(slide.kind))}</div><div class="slide-sub">${esc(kindLabel(slide.kind))} · ${esc(playlists.find(item => item.id === slide.playlist_id)?.name || 'spellista')}</div></div><div class="slide-buttons"><button class="button ghost small channel-show-now" data-id="${esc(slide.id)}" ${canEdit ? '' : 'hidden'}>Visa nu</button></div></div>`).join('')}</div></details>` : ''}
       <div class="slide-add-grid ${canEdit ? '' : 'hidden'}">
         <div class="add-box"><h3>Textmeddelande</h3><form class="text-slide-form add-text"><input name="title" maxlength="80" placeholder="Rubrik" required /><textarea name="body" maxlength="1200" placeholder="Meddelande" required></textarea><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="15" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Publicera text</button></div>${scheduleFields()}</form></div>
-        <div class="add-box"><h3>Video eller live-data</h3><form class="text-slide-form add-source"><select name="kind"><option value="video">Video (MP4-länk eller fil)</option><option value="feed">Live-data / JSON-feed (API)</option></select><label class="feed-refresh-setting hidden">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="30" /></label><input name="title" maxlength="80" placeholder="Namn på innehåll" required /><input name="url" type="url" placeholder="https://… eller intern API-adress" /><label class="file-label">För video kan du också välja MP4-fil <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime" /></label><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="30" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till</button></div>${scheduleFields()}</form></div>
+        <div class="add-box"><h3>Bild, video eller live-data</h3><form class="text-slide-form add-source"><select name="kind"><option value="video">Video (MP4-länk eller fil)</option><option value="image">Bild (URL eller fil)</option><option value="feed">Live-data / JSON-feed (API)</option></select><label class="feed-refresh-setting hidden">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="30" /></label><input name="title" maxlength="80" placeholder="Namn på innehåll" required /><input name="url" type="url" placeholder="https://… eller intern API-adress" /><label class="file-label hidden">Videofil (valfritt) <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime" /></label><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="30" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till</button></div>${scheduleFields()}</form></div>
         <div class="add-box"><h3>Klocka & datum</h3><form class="text-slide-form add-clock"><input name="title" maxlength="80" placeholder="Rubrik, till exempel Välkommen" /><input name="body" maxlength="180" placeholder="Valfri underrad" /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="20" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till klocka</button></div>${scheduleFields()}</form></div>
         <div class="add-box"><h3>Webbsida eller live-dashboard</h3><form class="text-slide-form add-web"><input name="title" maxlength="80" placeholder="Namn på sidan" required /><input name="url" type="url" placeholder="https://…" required /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="60" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till sida</button></div>${scheduleFields()}</form></div>
       </div>
@@ -1146,8 +1161,14 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   card.querySelector('.add-clock').addEventListener('submit', event => addSlide(event, screen, 'clock'));
   const sourceForm = card.querySelector('.add-source');
   sourceForm.querySelector('[name="kind"]').addEventListener('change', event => {
-    sourceForm.querySelector('.feed-refresh-setting').classList.toggle('hidden', event.target.value !== 'feed');
+    const kind = event.target.value;
+    sourceForm.querySelector('.feed-refresh-setting').classList.toggle('hidden', kind !== 'feed');
+    const fileInput = sourceForm.querySelector('[name="file"]');
+    fileInput.accept = kind === 'image' ? 'image/jpeg,image/png,image/webp' : kind === 'video' ? 'video/mp4,video/webm,video/quicktime' : '';
+    sourceForm.querySelector('.file-label').classList.toggle('hidden', !['image', 'video'].includes(kind));
+    sourceForm.querySelector('.file-label').firstChild.textContent = kind === 'image' ? 'Bildfil (valfritt) ' : 'Videofil (valfritt) ';
   });
+  sourceForm.querySelector('[name="kind"]').dispatchEvent(new Event('change'));
   sourceForm.addEventListener('submit', event => addSource(event, screen, slides.length));
   card.querySelector('.add-web').addEventListener('submit', event => addWeb(event, screen));
   card.querySelectorAll('[data-slide-action]').forEach(button => button.addEventListener('click', () => slideAction(button, screen, slides)));
@@ -1165,7 +1186,7 @@ function scheduleSummary(item) {
 
 function renderSlide(slide, index, count, canEdit) {
   const detail = slide.kind === 'text' ? (slide.body || '') : slide.kind === 'clock' ? 'Lokal tid och datum' : (slide.source_url || 'Ingen källa');
-  return `<div class="slide-row"><div class="slide-thumb">${slide.kind === 'video' ? '▶' : slide.kind === 'feed' ? '↗' : slide.kind === 'web' ? '↗' : slide.kind === 'clock' ? '◷' : 'T'}</div><div><div class="slide-title">${esc(slide.title || kindLabel(slide.kind))}</div><div class="slide-sub">${esc(kindLabel(slide.kind))} · ${slide.duration_seconds}s · ${esc(detail)}</div></div><div class="slide-buttons"><button class="button ghost small show-now" data-slide-action="show-now" data-id="${slide.id}" ${canEdit ? '' : 'hidden'}>Visa nu</button><button class="icon-button" data-slide-action="up" data-id="${slide.id}" ${canEdit ? '' : 'hidden'} ${index === 0 ? 'disabled' : ''}>↑</button><button class="icon-button" data-slide-action="down" data-id="${slide.id}" ${canEdit ? '' : 'hidden'} ${index === count - 1 ? 'disabled' : ''}>↓</button><button class="icon-button delete" data-slide-action="delete" data-id="${slide.id}" ${canEdit ? '' : 'hidden'}>×</button></div></div>`;
+  return `<div class="slide-row"><div class="slide-thumb">${slide.kind === 'image' ? '▧' : slide.kind === 'video' ? '▶' : slide.kind === 'feed' ? '↗' : slide.kind === 'web' ? '↗' : slide.kind === 'clock' ? '◷' : 'T'}</div><div><div class="slide-title">${esc(slide.title || kindLabel(slide.kind))}</div><div class="slide-sub">${esc(kindLabel(slide.kind))} · ${slide.duration_seconds}s · ${esc(detail)}</div></div><div class="slide-buttons"><button class="button ghost small show-now" data-slide-action="show-now" data-id="${slide.id}" ${canEdit ? '' : 'hidden'}>Visa nu</button><button class="icon-button" data-slide-action="up" data-id="${slide.id}" ${canEdit ? '' : 'hidden'} ${index === 0 ? 'disabled' : ''}>↑</button><button class="icon-button" data-slide-action="down" data-id="${slide.id}" ${canEdit ? '' : 'hidden'} ${index === count - 1 ? 'disabled' : ''}>↓</button><button class="icon-button delete" data-slide-action="delete" data-id="${slide.id}" ${canEdit ? '' : 'hidden'}>×</button></div></div>`;
 }
 
 async function setForcedSlide(screen, slideId) {
@@ -1257,15 +1278,19 @@ async function addSource(event, screen) {
   const file = f.get('file');
   const schedule = scheduleValues(f);
   if (!schedule) return;
-  if (kind === 'feed' && file instanceof File && file.size > 0) return toast('JSON-feed använder en URL. Välj en videofil bara för video.', true);
+  if (kind === 'feed' && file instanceof File && file.size > 0) return toast('JSON-feed använder en URL, inte en fil.', true);
   if (file instanceof File && file.size > 0) {
-    if (file.size > 400 * 1024 * 1024) return toast('Videofilen får vara högst 400 MB i den här versionen.', true);
+    if (!['image', 'video'].includes(kind)) return toast('Välj bild eller video för att ladda upp en fil.', true);
+    const maxBytes = kind === 'image' ? 30 * 1024 * 1024 : 400 * 1024 * 1024;
+    if (file.size > maxBytes) return toast(kind === 'image' ? 'Bildfilen får vara högst 30 MB.' : 'Videofilen får vara högst 400 MB.', true);
+    if (kind === 'image' && !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return toast('Bilder ska vara JPEG, PNG eller WebP.', true);
     const path = `${screen.playlist_id || screen.id}/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     const { error: uploadError } = await supabase.storage.from('signage-assets').upload(path, file, { cacheControl: '0', upsert: false });
     if (uploadError) return toast(uploadError.message, true);
     source_url = supabase.storage.from('signage-assets').getPublicUrl(path).data.publicUrl;
   }
-  if (!source_url) return toast('Ange en videolänk, en feed-URL eller välj en videofil.', true);
+  if (!source_url) return toast('Ange en bild-/videolänk, en feed-URL eller välj en fil.', true);
+  if (['image', 'video', 'feed'].includes(kind) && !/^https?:\/\//i.test(source_url)) return toast('Källan ska börja med HTTPS eller HTTP.', true);
   const refresh_interval_seconds = kind === 'feed' ? Number(f.get('refresh_interval_seconds') || 30) : 30;
   if (kind === 'feed' && (!Number.isInteger(refresh_interval_seconds) || refresh_interval_seconds < 10 || refresh_interval_seconds > 3600)) return toast('Uppdateringsintervallet ska vara 10–3600 sekunder.', true);
   const { error } = await supabase.from('slides').insert({ ...contentOwner(screen), kind, title: String(f.get('title') || '').trim(), source_url, duration_seconds: Number(f.get('duration')) || 30, refresh_interval_seconds, sort_order: await nextOrder(screen), is_active: true, ...schedule });

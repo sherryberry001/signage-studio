@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261030-activity-log" />
-    <script type="module" src="./app.js?v=20261030-activity-log"></script>
+    <link rel="stylesheet" href="./style.css?v=20261031-image-media" />
+    <script type="module" src="./app.js?v=20261031-image-media"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -69,15 +69,15 @@
         </div>
         <div id="channelManagementList" class="channel-management-list" data-workspace-panel="channels"></div>
         <section id="mediaLibraryPanel" class="team-panel media-library-panel" data-workspace-panel="content">
-          <div class="team-heading"><div><strong>Innehållsbibliotek</strong><span>Spara länkar, live-data, text och video en gång. Lägg sedan till dem i valfri spellista.</span></div><input id="mediaSearch" type="search" placeholder="Sök namn eller tagg…" aria-label="Sök i innehållsbiblioteket" /></div>
+          <div class="team-heading"><div><strong>Innehållsbibliotek</strong><span>Spara länkar, live-data, text, bilder och video en gång. Lägg sedan till dem i valfri spellista.</span></div><input id="mediaSearch" type="search" placeholder="Sök namn eller tagg…" aria-label="Sök i innehållsbiblioteket" /></div>
           <form id="mediaLibraryForm" class="media-library-form">
-            <select name="kind" aria-label="Innehållstyp"><option value="web">Webbsida / dashboard</option><option value="feed">JSON-feed</option><option value="video">Video</option><option value="text">Textmeddelande</option><option value="clock">Klocka & datum</option></select>
+            <select name="kind" aria-label="Innehållstyp"><option value="web">Webbsida / dashboard</option><option value="feed">JSON-feed</option><option value="image">Bild</option><option value="video">Video</option><option value="text">Textmeddelande</option><option value="clock">Klocka & datum</option></select>
             <input name="title" maxlength="120" placeholder="Namn på innehållet" required />
             <input name="source_url" type="url" placeholder="Källans HTTPS- eller HTTP-adress" />
             <input name="body" maxlength="1200" placeholder="Textinnehåll (för textmeddelande)" />
             <input name="tags" maxlength="200" placeholder="Taggar, separerade med komma" />
             <label class="feed-refresh-setting hidden">Uppdatera live-data var (sek) <input name="refresh_interval_seconds" type="number" min="10" max="3600" value="30" /></label>
-            <label class="file-label">MP4-fil (valfritt för video) <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime" /></label>
+            <label class="file-label hidden">Video- eller bildfil (valfritt) <input name="file" type="file" accept="video/mp4,video/webm,video/quicktime,image/jpeg,image/png,image/webp" /></label>
             <button class="button primary" type="submit">＋ Spara i biblioteket</button>
           </form>
           <div id="mediaLibraryList" class="media-library-list"></div>

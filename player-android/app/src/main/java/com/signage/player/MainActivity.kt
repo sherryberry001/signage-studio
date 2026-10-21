@@ -1,6 +1,8 @@
 package com.signage.player
 
 import android.app.Activity
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
@@ -220,7 +222,7 @@ class MainActivity : Activity() {
                 prefs.edit().putString("playlist", fresh.toString()).putString("last_sync", Instant.now().toString()).apply()
                 setPlayerPlaylist(fresh)
                 lastSync = "Synkad ${DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.now())}"
-                preloadVideos(fresh)
+                preloadMedia(fresh)
                 if (freshConfig != null) prefs.edit().putString("screen_config", freshConfig.toString()).apply()
                 val effectiveConfig = freshConfig ?: screenConfig
                 handler.post {
@@ -308,12 +310,12 @@ class MainActivity : Activity() {
         } catch (_: Exception) { }
     }
 
-    private fun preloadVideos(items: JSONArray) {
+    private fun preloadMedia(items: JSONArray) {
         for (i in 0 until items.length()) {
             val item = items.optJSONObject(i) ?: continue
-            if (item.optString("kind") == "video") {
+            if (item.optString("kind") in setOf("video", "image")) {
                 val source = item.optString("source_url")
-                if (source.isNotBlank() && !source.substringBefore('?').endsWith(".m3u8", ignoreCase = true)) {
+                if (source.isNotBlank() && !(item.optString("kind") == "video" && source.substringBefore('?').endsWith(".m3u8", ignoreCase = true))) {
                     try { localMedia(source, download = true) } catch (_: Exception) { }
                 }
             }
@@ -379,6 +381,7 @@ class MainActivity : Activity() {
         reportHeartbeat(item)
         val duration = timedSelection?.second ?: item.optInt("duration_seconds", 15).coerceIn(5, 600) * 1000L
         when (item.optString("kind")) {
+            "image" -> showImage(item)
             "video" -> showVideo(item)
             "clock" -> showClock(item)
             "feed" -> showFeed(item)
@@ -460,10 +463,28 @@ class MainActivity : Activity() {
 
     private fun showSecondaryZoneSlide(container: FrameLayout, item: JSONObject, layout: String, delayOverrideMillis: Long? = null) {
         container.removeAllViews()
-        val generation = zoneGeneration
+        val generation = ++zoneGeneration
         val kind = item.optString("kind")
         val title = item.optString("title").ifBlank { kind }
         when (kind) {
+            "image" -> {
+                val source = item.optString("source_url")
+                val image = ImageView(this).apply {
+                    setBackgroundColor(Color.BLACK)
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                }
+                container.addView(image, FrameLayout.LayoutParams(-1, -1))
+                val targetWidth = container.width.coerceAtLeast(1280)
+                val targetHeight = container.height.coerceAtLeast(720)
+                worker.execute {
+                    val bitmap = runCatching { localMedia(source, download = true)?.let { decodeImage(it, targetWidth, targetHeight) } }.getOrNull()
+                    handler.post {
+                        if (generation == zoneGeneration && zoneRoot === container && bitmap != null) image.setImageBitmap(bitmap)
+                        else bitmap?.recycle()
+                        if (generation == zoneGeneration && zoneRoot === container && bitmap == null) showSecondaryZoneText(container, title, layout)
+                    }
+                }
+            }
             "video" -> {
                 val source = item.optString("source_url")
                 val local = runCatching { localMedia(source, download = false) }.getOrNull()
@@ -1114,6 +1135,40 @@ class MainActivity : Activity() {
         root.addView(video, FrameLayout.LayoutParams(-1, -1))
     }
 
+    private fun showImage(item: JSONObject) {
+        val source = item.optString("source_url")
+        val generation = slideGeneration
+        val image = ImageView(this).apply {
+            setBackgroundColor(Color.BLACK)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = item.optString("title").ifBlank { "Skyltbild" }
+        }
+        root.addView(image, FrameLayout.LayoutParams(-1, -1))
+        val targetWidth = root.width.coerceAtLeast(1280)
+        val targetHeight = root.height.coerceAtLeast(720)
+        worker.execute {
+            val bitmap = runCatching { localMedia(source, download = true)?.let { decodeImage(it, targetWidth, targetHeight) } }.getOrNull()
+            handler.post {
+                if (generation != slideGeneration || currentSlide?.optString("id") != item.optString("id")) {
+                    bitmap?.recycle()
+                } else if (bitmap != null) {
+                    image.setImageBitmap(bitmap)
+                } else {
+                    showMessage(item.optString("title", "Bild"), "Bilden kunde inte hämtas eller läsas.")
+                }
+            }
+        }
+    }
+
+    private fun decodeImage(file: File, targetWidth: Int, targetHeight: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sampleSize = 1
+        while (bounds.outWidth / sampleSize > targetWidth * 2 || bounds.outHeight / sampleSize > targetHeight * 2) sampleSize *= 2
+        return BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply { inSampleSize = sampleSize })
+    }
+
     private fun showIdle() {
         val timeItem = JSONObject().put("title", "").put("body", "")
         showClock(timeItem)
@@ -1239,7 +1294,7 @@ class MainActivity : Activity() {
     private fun extension(source: String): String {
         val path = runCatching { Uri.parse(source).lastPathSegment.orEmpty() }.getOrDefault("")
         val ext = path.substringAfterLast('.', "").lowercase()
-        return if (ext in setOf("mp4", "webm", "mov", "m3u8")) ".$ext" else ".mp4"
+        return if (ext in setOf("mp4", "webm", "mov", "m3u8", "jpg", "jpeg", "png", "webp")) ".$ext" else ".mp4"
     }
 
     private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
