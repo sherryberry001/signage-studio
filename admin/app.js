@@ -150,6 +150,7 @@ let channelSchedules = [];
 let teamMembers = [];
 let screenCommands = [];
 let screenPublications = [];
+let screenBroadcasts = [];
 let mediaLibrary = [];
 let mediaFolders = [];
 let mediaLibraryVersions = [];
@@ -735,7 +736,8 @@ async function loadScreens() {
     { data: groupData, error: groupError },
     { data: groupMemberData, error: groupMemberError },
     { data: locationData, error: locationError },
-    { data: locationMemberData, error: locationMemberError }
+    { data: locationMemberData, error: locationMemberError },
+    { data: broadcastData, error: broadcastError }
   ] = await Promise.all([
     supabase.from('screens').select('*').order('created_at', { ascending: false }),
     supabase.from('playlists').select('*').order('name', { ascending: true }),
@@ -752,7 +754,8 @@ async function loadScreens() {
     supabase.from('screen_groups').select('*').order('name', { ascending: true }),
     supabase.from('screen_group_members').select('id,group_id,user_id,created_at').order('created_at', { ascending: true }),
     supabase.from('locations').select('id,name,description,created_at').order('name', { ascending: true }),
-    supabase.from('location_members').select('id,location_id,user_id,created_at').order('created_at', { ascending: true })
+    supabase.from('location_members').select('id,location_id,user_id,created_at').order('created_at', { ascending: true }),
+    supabase.from('screen_broadcasts').select('id,title,body,starts_at,ends_at,created_at,cancelled_at,screen_broadcast_targets(screen_id,superseded_at)').is('cancelled_at', null).lte('starts_at', new Date().toISOString()).gt('ends_at', new Date().toISOString()).order('created_at', { ascending: false }).limit(50)
   ]);
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
@@ -771,6 +774,7 @@ async function loadScreens() {
   if (groupMemberError) return toast(groupMemberError.message, true);
   if (locationError) return toast(locationError.message, true);
   if (locationMemberError) return toast(locationMemberError.message, true);
+  if (broadcastError && broadcastError.code !== '42P01') return toast(broadcastError.message, true);
   teamMembers = memberData || [];
   currentRole = teamMembers.find(member => member.user_id === userId)?.role || null;
   updateRoleVisibility();
@@ -828,6 +832,7 @@ async function loadScreens() {
   channelPlaylists = channelPlaylistData || [];
   channelSchedules = channelScheduleData || [];
   screenCommands = commandData || [];
+  screenBroadcasts = broadcastError ? [] : (broadcastData || []);
   screenPublications = publicationData || [];
   const latestPublications = new Map();
   const publicationHistory = new Map();
@@ -843,6 +848,7 @@ async function loadScreens() {
   updateChannelManagement();
   renderScreenGroups();
   renderLocations();
+  renderScreenBroadcasts();
   renderPlaylistLibrary();
   renderMediaLibrary();
   $('#emptyState').classList.toggle('hidden', screens.length > 0);
@@ -1801,6 +1807,8 @@ $('#clearScreenSelection').addEventListener('click', () => {
 });
 document.querySelectorAll('[data-bulk-command]').forEach(button => button.addEventListener('click', () => queueBulkPlayerCommand(button.dataset.bulkCommand, button)));
 $('#publishSelectedScreens').addEventListener('click', publishSelectedScreens);
+$('#screenBroadcastForm').addEventListener('submit', sendScreenBroadcast);
+$('#screenBroadcastList').addEventListener('click', cancelScreenBroadcastFromList);
 $('#assignSelectedGroup').addEventListener('click', assignSelectedScreensToGroup);
 $('#assignSelectedLocation').addEventListener('click', assignSelectedScreensToLocation);
 
@@ -1949,13 +1957,106 @@ async function publishSelectedScreens() {
   await loadScreens();
 }
 
+function renderScreenBroadcasts() {
+  const list = $('#screenBroadcastList');
+  if (!list) return;
+  const now = Date.now();
+  const active = screenBroadcasts.filter(item => !item.cancelled_at
+    && new Date(item.starts_at).getTime() <= now
+    && new Date(item.ends_at).getTime() > now
+    && (item.screen_broadcast_targets || []).some(target => !target.superseded_at));
+  if (!active.length) {
+    list.innerHTML = '<span class="screen-groups-empty">Inga aktiva tillfälliga utskick.</span>';
+    return;
+  }
+  list.replaceChildren(...active.map(item => {
+    const targetIds = (item.screen_broadcast_targets || []).filter(target => !target.superseded_at).map(target => target.screen_id);
+    const targetNames = targetIds.map(id => screens.find(screen => screen.id === id)?.name).filter(Boolean);
+    const row = document.createElement('article');
+    row.className = 'screen-broadcast-row';
+    const detail = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = item.title;
+    const meta = document.createElement('small');
+    meta.textContent = `${targetNames.length} skärmar · slutar ${new Date(item.ends_at).toLocaleString('sv-SE')}${item.body ? ` · ${item.body}` : ''}`;
+    detail.append(title, meta);
+    row.append(detail);
+    if (['admin', 'editor'].includes(currentRole)) {
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'button ghost small';
+      cancel.dataset.broadcastCancel = item.id;
+      cancel.textContent = 'Avbryt';
+      row.append(cancel);
+    }
+    return row;
+  }));
+}
+
+async function sendScreenBroadcast(event) {
+  event.preventDefault();
+  if (!['admin', 'editor'].includes(currentRole)) return;
+  const selected = screens.filter(screen => selectedScreenIds.has(screen.id));
+  const active = selected.filter(screen => screen.is_active && screen.activated_at);
+  if (!active.length) return toast('Markera minst en parkopplad, aktiv skärm.', true);
+  if (active.length > 100) return toast('Ett utskick kan gå till högst 100 skärmar åt gången.', true);
+  const form = event.currentTarget;
+  const title = form.elements.title.value.trim();
+  const body = form.elements.body.value.trim();
+  const duration = Number(form.elements.duration.value);
+  if (!title || !body) return toast('Fyll i både rubrik och meddelande.', true);
+  if (!Number.isInteger(duration) || duration < 1 || duration > 1440) return toast('Välj en giltig visningstid.', true);
+  const skipped = selected.length - active.length;
+  const skippedLabel = skipped ? ` ${skipped} pausade eller opairade skärmar hoppas över.` : '';
+  if (!confirm(`Skicka ”${title}” till ${active.length} aktiva skärmar i ${duration} minuter? Utskicket visas direkt ovanpå deras vanliga innehåll.${skippedLabel}`)) return;
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    const { error } = await supabase.rpc('create_screen_broadcast', {
+      input_screen_ids: active.map(screen => screen.id),
+      input_title: title,
+      input_body: body,
+      input_duration_minutes: duration
+    });
+    if (error) return toast(error.message, true);
+    form.reset();
+    form.elements.duration.value = '10';
+    $('#screenBroadcastComposer').open = false;
+    toast(`Meddelandet skickades till ${active.length} skärmar. De återgår automatiskt efter ${duration} minuter.`);
+    await loadScreens();
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function cancelScreenBroadcastFromList(event) {
+  const button = event.target.closest('[data-broadcast-cancel]');
+  if (!button || !['admin', 'editor'].includes(currentRole)) return;
+  const broadcast = screenBroadcasts.find(item => item.id === button.dataset.broadcastCancel);
+  if (!broadcast || !confirm(`Avbryt ”${broadcast.title}” nu? Anslutna skärmar återgår vid nästa synk.`)) return;
+  button.disabled = true;
+  const { data: targetCount, error } = await supabase.rpc('cancel_screen_broadcast', { input_broadcast_id: broadcast.id });
+  if (error) {
+    button.disabled = false;
+    return toast(error.message, true);
+  }
+  toast(`Utskicket avbröts. Synk köad för ${targetCount} skärmar.`);
+  await loadScreens();
+}
+
 async function refreshScreenStatus() {
   if (!currentUser) return;
-  const [{ data, error }, { data: commandData, error: commandError }] = await Promise.all([
+  const [
+    { data, error },
+    { data: commandData, error: commandError },
+    { data: broadcastData, error: broadcastError }
+  ] = await Promise.all([
     supabase.from('screens').select('id,last_seen_at,preview_updated_at,current_title,current_body,current_kind,current_source_url,current_slide_id,forced_slide_id,player_version,device_model,android_version,display_size,network_type,device_updated_at,applied_revision,applied_revision_at'),
-    supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100)
+    supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100),
+    supabase.from('screen_broadcasts').select('id,title,body,starts_at,ends_at,created_at,cancelled_at,screen_broadcast_targets(screen_id,superseded_at)').is('cancelled_at', null).lte('starts_at', new Date().toISOString()).gt('ends_at', new Date().toISOString()).order('created_at', { ascending: false }).limit(50)
   ]);
   if (error || commandError) return;
+  if (!broadcastError) screenBroadcasts = broadcastData || [];
   screenCommands = commandData || [];
   const liveWithPreviews = await Promise.all((data || []).map(async screen => {
     if (!screen.preview_updated_at || !isOnline(screen)) return screen;
@@ -1975,6 +2076,7 @@ async function refreshScreenStatus() {
   const liveById = new Map(liveWithPreviews.map(item => [item.id, item]));
   screens = screens.map(screen => ({ ...screen, ...(liveById.get(screen.id) || {}) }));
   updateScreenSummary();
+  renderScreenBroadcasts();
   for (const screen of screens) {
     const card = screenList.querySelector(`[data-screen-id="${CSS.escape(screen.id)}"]`);
     if (!card) continue;
