@@ -915,20 +915,42 @@ class MainActivity : Activity() {
         val title = item.optString("title")
         val source = item.optString("source_url")
         worker.execute {
+            var httpStatus: Int? = null
+            var failureStatus = "ok"
             val raw = try {
                 val key = "feed_${sha256(source)}"
                 val displayToken = Uri.parse(source).fragment?.removePrefix("token=")?.takeIf { it.isNotBlank() }
-                val fresh = URL(source.substringBefore('#')).openConnection().run {
+                val connection = URL(source.substringBefore('#')).openConnection() as HttpURLConnection
+                val fresh = connection.run {
                     connectTimeout = 8_000; readTimeout = 8_000
                     useCaches = false
                     setRequestProperty("Cache-Control", "no-cache, no-store, max-age=0")
                     setRequestProperty("Pragma", "no-cache")
                     if (displayToken != null) setRequestProperty("x-pulse-display-token", displayToken)
+                    val response = this.responseCode
+                    httpStatus = response
+                    if (response !in 200..299) {
+                        failureStatus = "http_error"
+                        throw java.io.IOException("Feed returned HTTP $response")
+                    }
                     getInputStream().bufferedReader().use { it.readText() }
                 }
+                connection.disconnect()
+                if (runCatching { JSONObject(fresh) }.isFailure) {
+                    failureStatus = "invalid_json"
+                    throw java.io.IOException("Feed response is not a JSON object")
+                }
                 prefs.edit().putString(key, fresh).apply()
+                reportFeedStatus(item, "ok", httpStatus, null)
                 fresh
             } catch (_: Exception) {
+                if (failureStatus == "ok") failureStatus = "network_error"
+                val errorCode = when (failureStatus) {
+                    "http_error" -> "http_${httpStatus ?: 0}"
+                    "invalid_json" -> "invalid_json"
+                    else -> "network_error"
+                }
+                reportFeedStatus(item, failureStatus, httpStatus, errorCode)
                 prefs.getString("feed_${sha256(source)}", null)
             }
             handler.post {
@@ -950,6 +972,22 @@ class MainActivity : Activity() {
                     reportHeartbeat(item, title.ifBlank { "Informationsflöde" }, currentBody, "feed", source)
                     if (refreshSecondaryZone) applyMultiZoneLayout(item)
                 }
+            }
+        }
+    }
+
+    private fun reportFeedStatus(item: JSONObject, status: String, httpStatus: Int?, errorCode: String?) {
+        val screen = screenId ?: return
+        val slide = item.optString("id").takeIf { it.isNotBlank() } ?: return
+        worker.execute {
+            runCatching {
+                val body = JSONObject()
+                    .put("input_screen_id", screen)
+                    .put("input_slide_id", slide)
+                    .put("input_status", status)
+                    .put("input_http_status", httpStatus ?: JSONObject.NULL)
+                    .put("input_error_code", errorCode ?: JSONObject.NULL)
+                apiRequest("${baseUrl()}/rest/v1/rpc/player_report_feed_status", "POST", body.toString())
             }
         }
     }

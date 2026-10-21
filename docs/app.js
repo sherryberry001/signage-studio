@@ -21,9 +21,11 @@ let screenCommands = [];
 let mediaLibrary = [];
 let activityLog = [];
 let playbackEvents = [];
+let integrationStatuses = [];
 let currentRole = null;
 let statusTimer = null;
 let activityTimer = null;
+let integrationTimer = null;
 let screensLoadId = 0;
 let activityLoadId = 0;
 const selectedScreenIds = new Set();
@@ -32,6 +34,7 @@ const workspaceDetails = {
   screens: ['Skärmar', 'Övervaka anslutning, innehåll och status för dina skärmar.'],
   content: ['Innehåll', 'Hantera återanvändbara spellistor och innehållsbiblioteket.'],
   channels: ['Kanaler', 'Planera vad som ska visas, när det ska visas och på vilka skärmar.'],
+  integrations: ['Integrationer', 'Övervaka live-feeds som rapporteras från anslutna skärmar.'],
   proof: ['Uppspelning', 'Följ rapporterade innehållsbyten per skärm och exportera uppspelningshistorik.'],
   team: ['Team', 'Hantera personer och åtkomst till Signage Studio.'],
   activity: ['Aktivitet', 'Följ ändringar och fjärråtgärder i Signage Studio.']
@@ -50,6 +53,8 @@ function setWorkspace(workspace) {
   if (workspace === 'activity' && currentRole !== 'admin') return;
   clearInterval(activityTimer);
   activityTimer = null;
+  clearInterval(integrationTimer);
+  integrationTimer = null;
   activeWorkspace = workspace;
   document.querySelectorAll('[data-workspace-panel]').forEach(panel => {
     panel.classList.toggle('hidden', panel.dataset.workspacePanel !== workspace);
@@ -67,6 +72,10 @@ function setWorkspace(workspace) {
     activityTimer = setInterval(loadActivityLog, 15000);
   }
   if (workspace === 'proof') loadPlaybackEvents();
+  if (workspace === 'integrations') {
+    loadIntegrationStatus();
+    integrationTimer = setInterval(loadIntegrationStatus, 30000);
+  }
 }
 
 setWorkspace('screens');
@@ -135,6 +144,8 @@ function setSession(user) {
     clearInterval(statusTimer);
     clearInterval(activityTimer);
     activityTimer = null;
+    clearInterval(integrationTimer);
+    integrationTimer = null;
   }
 }
 
@@ -333,6 +344,9 @@ $('#playbackTo').addEventListener('change', loadPlaybackEvents);
 $('#playbackScreen').addEventListener('change', loadPlaybackEvents);
 $('#playbackSearch').addEventListener('input', renderPlaybackEvents);
 $('#exportPlayback').addEventListener('click', exportPlaybackEvents);
+$('#refreshIntegrations').addEventListener('click', loadIntegrationStatus);
+$('#integrationSearch').addEventListener('input', renderIntegrationStatus);
+$('#integrationFilter').addEventListener('change', renderIntegrationStatus);
 
 $('#mediaLibraryForm [name="kind"]').addEventListener('change', event => {
   const form = $('#mediaLibraryForm');
@@ -858,6 +872,46 @@ function exportPlaybackEvents() {
   link.download = `uppspelning-${localDateInput(new Date())}.csv`;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function renderIntegrationStatus() {
+  const list = $('#integrationList');
+  if (!list) return;
+  const query = ($('#integrationSearch').value || '').trim().toLocaleLowerCase('sv-SE');
+  const filter = $('#integrationFilter').value;
+  const rows = integrationStatuses.filter(item => {
+    const matchesStatus = filter === 'all' || (filter === 'ok' ? item.status === 'ok' : item.status !== 'ok');
+    const matchesSearch = !query || `${item.feed_title} ${item.screen_name} ${item.source_host}`.toLocaleLowerCase('sv-SE').includes(query);
+    return matchesStatus && matchesSearch;
+  });
+  const healthy = integrationStatuses.filter(item => item.status === 'ok').length;
+  $('#integrationSummary').innerHTML = `<span><strong>${integrationStatuses.length}</strong> feedanslutningar</span><span><strong>${healthy}</strong> senaste hämtning lyckades</span><span><strong>${integrationStatuses.length - healthy}</strong> fel vid senaste hämtning</span>`;
+  if (!integrationStatuses.length) {
+    list.innerHTML = '<div class="activity-empty">Inga skärmar har rapporterat en feed ännu. Status visas här när spelaren hämtar en JSON-feed eller Pulse-panel.</div>';
+    return;
+  }
+  if (!rows.length) {
+    list.innerHTML = '<div class="activity-empty">Inget matchar sökningen eller statusfiltret.</div>';
+    return;
+  }
+  const formatDate = value => value ? new Intl.DateTimeFormat('sv-SE', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : 'Aldrig';
+  const errorLabel = item => {
+    if (item.status === 'http_error') return `HTTP-fel${item.last_http_status ? ` ${item.last_http_status}` : ''}`;
+    if (item.status === 'invalid_json') return 'Svaret är inte giltig JSON';
+    if (item.status === 'network_error') return 'Nätverksfel';
+    return 'Ingen felrapport';
+  };
+  list.innerHTML = rows.map(item => `<article class="integration-card"><div class="integration-card-main"><div class="integration-status-dot ${item.status === 'ok' ? 'ok' : 'error'}"></div><div class="integration-card-copy"><strong>${esc(item.feed_title)}</strong><span>${esc(item.screen_name)} · ${esc(item.source_host || 'Källvärd okänd')}</span><small>${item.status === 'ok' ? 'Senaste hämtning lyckades' : esc(errorLabel(item))} · försök ${esc(formatDate(item.last_attempt_at))}</small><small>Senaste lyckade hämtning · ${esc(formatDate(item.last_success_at))}</small></div></div><span class="integration-status-pill ${item.status === 'ok' ? 'ok' : 'error'}">${item.status === 'ok' ? 'Fungerar' : 'Fel'}</span></article>`).join('');
+}
+
+async function loadIntegrationStatus() {
+  if (!currentRole) return;
+  const { data, error } = await supabase.from('screen_feed_status')
+    .select('screen_id,slide_id,screen_name,feed_title,source_host,status,last_attempt_at,last_success_at,last_http_status,last_error_code')
+    .order('last_attempt_at', { ascending: false }).limit(300);
+  if (error) return toast(error.message, true);
+  integrationStatuses = data || [];
+  renderIntegrationStatus();
 }
 
 function isOnline(screen) {

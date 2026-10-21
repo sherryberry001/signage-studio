@@ -16,7 +16,7 @@ Signage Studio should cover the core jobs handled by mature digital-signage plat
 | Screens and devices | Pairing, groups, online status, previews, bulk actions, remote restart/sync, player version, TV model, Android version, resolution and network diagnostics | Add health history, alerts, and device troubleshooting actions |
 | Content | Text, image, video, web links, JSON feeds, reusable library | Robust upload pipeline, expiry/approval, reusable native app instances |
 | Playlists and channels | Reusable playlists, recurring schedules, priority, multi-zone | Drag ordering, calendar view, preview before publish, schedule conflict visibility |
-| Live data and apps | Native Pulse/JSON feed and web dashboard support | Integration catalog and credential-safe connectors with refresh/health indicators |
+| Live data and apps | Native Pulse/JSON feed and web dashboard support; per-screen feed status, HTTP/network errors, last success and source host | Expand connector catalog and move reusable credentials into server-managed integrations |
 | Remote screen operations | Set content, temporary cast, sync and restart | Screenshot refresh on demand, remote settings, support bundle, actionable alerts |
 | Team and organization | Roles, screen groups, group-scoped access, audit log | Spaces/locations, granular content permissions, invitations and activity export |
 | Playback reporting | Reported player content transitions, per-screen history, estimated display duration, filters and CSV export | Aggregated proof-of-play analytics, per-content totals and scheduled reports |
