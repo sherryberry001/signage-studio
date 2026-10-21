@@ -16,8 +16,8 @@ See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the researched capability
 | Area | Current coverage | Next product milestone |
 | --- | --- | --- |
 | Screens and devices | Pairing/recovery, stable player identity, unique active names, groups, online status, previews, bulk actions, remote restart/sync, device diagnostics, scheduled online/offline history, and downloadable support bundles | Reconcile legacy duplicate profiles; add guided remote troubleshooting and configurable alert thresholds |
-| Content | Text, image, video, web links, JSON feeds, reusable library, expiring media, versioned per-screen publishing snapshots | Approval, robust upload recovery, reusable native app instances |
-| Playlists and channels | Reusable playlists with atomic drag or keyboard ordering, recurring schedules, priority, multi-zone, weekly per-screen channel calendar, per-screen publish versions and queued player sync | Approval and playlist-level calendar entries |
+| Content | Text, image, video, web links, JSON feeds, reusable library, expiring media, versioned per-screen publishing snapshots and editor-to-admin approval | Robust upload recovery, reusable native app instances |
+| Playlists and channels | Reusable playlists with atomic drag or keyboard ordering, recurring schedules, priority, multi-zone, weekly per-screen channel calendar, draft preview, version history, restore and queued player sync | Playlist-level calendar entries and schedule conflict resolution |
 | Live data and apps | Native Pulse/JSON feed and web dashboard support; reusable Pulse connections with protected credentials; per-screen feed status, HTTP/network errors, last success and source host | Expand connector catalog with OAuth-backed business apps, refreshable credentials, and setup health checks |
 | Remote screen operations | Set content, temporary cast, sync, restart, and on-demand screenshot capture | Remote settings, support bundle, guided troubleshooting |
 | Team and organization | Roles, screen groups, group-scoped access, audit log | Spaces/locations, granular content permissions and activity export |
@@ -25,7 +25,7 @@ See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the researched capability
 | Player fleet | Android TV player, offline cache and autostart | Managed kiosk mode, player update channel, compatibility matrix and recovery workflow |
 | Creation tools | Structured text and feed presentation | Template-based canvas/editor and reusable branded layouts |
 
-Screen draft preview and append-only restore are available in the screen cards; restoring an older revision queues it as a new publication and leaves editable drafts untouched.
+Screen draft preview and append-only restore are available in the screen cards; restoring an older revision queues it as a new publication and leaves editable drafts untouched. Editors can submit an immutable snapshot for admin approval; approving publishes exactly that snapshot even if the working draft changes later.
 
 ## Delivery order
 

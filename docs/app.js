@@ -483,6 +483,7 @@ async function loadScreens() {
     { data: channelScheduleData, error: channelScheduleError },
     { data: commandData, error: commandError },
     { data: publicationData, error: publicationError },
+    { data: approvalData, error: approvalError },
     { data: mediaData, error: mediaError },
     { data: groupData, error: groupError },
     { data: groupMemberData, error: groupMemberError }
@@ -495,6 +496,7 @@ async function loadScreens() {
     supabase.from('screen_channel_schedules').select('*').order('priority', { ascending: true }),
     supabase.from('screen_commands').select('id,screen_id,command,status,created_at,completed_at,error_message').order('created_at', { ascending: false }).limit(100),
     supabase.from('screen_publications').select('screen_id,revision,published_at').order('revision', { ascending: false }),
+    supabase.from('screen_publication_requests').select('id,screen_id,status,requested_by,requested_at,reviewed_by,reviewed_at,review_note').order('requested_at', { ascending: false }).limit(200),
     supabase.from('media_library').select('*').order('updated_at', { ascending: false }).limit(300),
     supabase.from('screen_groups').select('*').order('name', { ascending: true }),
     supabase.from('screen_group_members').select('id,group_id,user_id,created_at').order('created_at', { ascending: true })
@@ -508,6 +510,7 @@ async function loadScreens() {
   if (channelScheduleError) return toast(channelScheduleError.message, true);
   if (commandError) return toast(commandError.message, true);
   if (publicationError) return toast(publicationError.message, true);
+  if (approvalError && approvalError.code !== '42P01') return toast(approvalError.message, true);
   if (mediaError && mediaError.code !== '42P01') return toast(mediaError.message, true);
   if (groupError) return toast(groupError.message, true);
   if (groupMemberError) return toast(groupMemberError.message, true);
@@ -592,7 +595,7 @@ async function loadScreens() {
     const screenChannelIds = new Set(channelSchedules.filter(item => item.screen_id === screen.id).map(item => item.channel_id));
     const screenChannelPlaylistIds = new Set(channelPlaylists.filter(item => screenChannelIds.has(item.channel_id)).map(item => item.playlist_id));
     const screenChannelSlides = (channelSlideData || []).filter(item => screenChannelPlaylistIds.has(item.playlist_id));
-    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(String(screen.name || '').trim().toLocaleLowerCase('sv-SE')) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides, latestPublications.get(screen.id), publicationHistory.get(screen.id) || []);
+    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(String(screen.name || '').trim().toLocaleLowerCase('sv-SE')) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides, latestPublications.get(screen.id), publicationHistory.get(screen.id) || [], (approvalData || []).filter(request => request.screen_id === screen.id));
   });
   const grouped = new Map();
   screens.forEach((screen, index) => {
@@ -1767,9 +1770,12 @@ function scheduleFields() {
   return `<div class="schedule-fields"><div class="weekday-picker" aria-label="Återkommande veckodagar">${days.map(([value, label]) => `<label><input type="checkbox" name="weekdays" value="${value}" /><span>${label}</span></label>`).join('')}</div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från datum och tid" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till datum och tid" /></div><div class="inline-fields"><input class="schedule-input" name="daily_from" type="time" aria-label="Visa dagligen från" /><input class="schedule-input" name="daily_until" type="time" aria-label="Visa dagligen till" /></div><span class="schedule-help">Valda dagar och klockslag återkommer varje vecka. Lämna tomt för alltid.</span></div>`;
 }
 
-function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, latestCommand = null, channelSlides = [], publication = null, publicationVersions = []) {
+function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, latestCommand = null, channelSlides = [], publication = null, publicationVersions = [], publicationRequests = []) {
   const canAdmin = currentRole === 'admin';
   const canEdit = canAdmin || currentRole === 'editor';
+  const pendingPublicationRequest = publicationRequests.find(request => request.status === 'pending');
+  const requestOwner = teamMembers.find(member => member.user_id === pendingPublicationRequest?.requested_by)?.email || 'Redaktör';
+  const latestPublicationRequest = publicationRequests[0];
   const card = document.createElement('article');
   card.className = 'screen-card';
   card.dataset.screenId = screen.id;
@@ -1784,9 +1790,10 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   card.innerHTML = `
     <div class="screen-head">
       <div class="screen-title-wrap"><input class="screen-select ${canEdit ? '' : 'hidden'}" type="checkbox" ${selectedScreenIds.has(screen.id) ? 'checked' : ''} aria-label="Välj ${esc(screen.name)}" /><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${esc(screenGroup?.name || 'Ingen grupp')} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · möjlig dubblett (${sameNameCount} med samma namn)` : ''}</div></div></div>
-      <div class="screen-actions">${pending}<button class="button ghost small preview-screen" type="button">Förhandsvisa utkast</button><button class="button primary small publish-screen ${canEdit ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Publicera</button><button class="button ghost small renew-pairing ${canAdmin ? '' : 'hidden'}">Ny kod</button><button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
+      <div class="screen-actions">${pending}<button class="button ghost small preview-screen" type="button">Förhandsvisa utkast</button><button class="button primary small request-publish-screen ${!canAdmin && canEdit ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Skicka för godkännande</button><button class="button primary small publish-screen ${canAdmin ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Publicera</button><button class="button ghost small renew-pairing ${canAdmin ? '' : 'hidden'}">Ny kod</button><button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
     </div>
     <div class="screen-publication-state">Senast publicerad ${publication ? `version ${esc(publication.revision)} · ${esc(new Date(publication.published_at).toLocaleString('sv-SE'))}` : 'inte ännu'} · ändringar ligger som utkast tills du publicerar.</div>
+    ${pendingPublicationRequest ? `<div class="publication-request-state"><span><strong>Väntar på publiceringsgodkännande</strong><small>Inskickad av ${esc(requestOwner)} · ${esc(new Date(pendingPublicationRequest.requested_at).toLocaleString('sv-SE'))}</small></span>${canAdmin ? `<div><button class="button primary small review-publication" type="button" data-decision="approve" data-request-id="${esc(pendingPublicationRequest.id)}">Godkänn och publicera</button><button class="button ghost small review-publication" type="button" data-decision="reject" data-request-id="${esc(pendingPublicationRequest.id)}">Avslå</button></div>` : ''}</div>` : latestPublicationRequest?.status === 'rejected' ? `<div class="publication-request-state rejected"><span><strong>Senaste publiceringsbegäran avslogs</strong><small>${esc(latestPublicationRequest.review_note || 'Ingen kommentar från admin.')}</small></span></div>` : ''}
     ${publicationVersions.length > 1 ? `<details class="publication-history"><summary>Versionshistorik · ${publicationVersions.length} versioner</summary><div class="publication-history-list">${publicationVersions.map((version, index) => `<div class="publication-history-row"><span><strong>Version ${esc(version.revision)}${index === 0 ? ' · aktuell' : ''}</strong><small>${esc(new Date(version.published_at).toLocaleString('sv-SE'))}</small></span>${index > 0 && canEdit && screen.is_active ? `<button class="button ghost small restore-publication" type="button" data-revision="${esc(version.revision)}">Återställ</button>` : ''}</div>`).join('')}</div><p>Återställning publicerar innehållet som en ny version och synkar det till TV:n. Utkastet i spellistor och kanaler ändras inte.</p></details>` : ''}
     <div class="screen-status-row"><div class="screen-live-status ${isOnline(screen) ? 'online' : 'offline'}"><span class="status-indicator"></span><span class="status-label">${isOnline(screen) ? 'Online nu' : 'Offline'}</span><span class="last-seen">${screen.last_seen_at ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Spelaren har inte rapporterat ännu'}</span></div><div class="current-content ${isOnline(screen) ? '' : 'stale'}"><span class="current-content-label">VISAS JUST NU</span><strong class="current-title">${esc(isOnline(screen) ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt')}</strong><span class="current-kind">${esc(isOnline(screen) ? kindLabel(screen.current_kind) : 'Skärmen är offline')}</span><div class="current-preview"></div></div><div class="device-diagnostics">${renderDeviceDiagnostics(screen)}</div></div>
     <div class="screen-body">
@@ -1811,6 +1818,31 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
       </div>
     </div>`;
   card.querySelector('.preview-screen').addEventListener('click', () => openDraftPreview(screen, slides, channelSlides));
+  card.querySelector('.request-publish-screen').addEventListener('click', async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    const { error } = await supabase.rpc('request_screen_publication', { input_screen_id: screen.id });
+    button.disabled = false;
+    if (error) return toast(error.message, true);
+    toast(`Utkastet för ”${screen.name}” skickades till admin för godkännande.`);
+    await loadScreens();
+  });
+  card.querySelectorAll('.review-publication').forEach(button => button.addEventListener('click', async () => {
+    const decision = button.dataset.decision;
+    const note = decision === 'reject' ? prompt('Kort kommentar till redaktören (valfritt):') : null;
+    if (decision === 'reject' && note === null) return;
+    if (decision === 'approve' && !confirm(`Godkänn den inskickade versionen av ”${screen.name}” och publicera till TV:n?`)) return;
+    button.disabled = true;
+    const { data: revision, error } = await supabase.rpc('review_screen_publication', {
+      input_request_id: button.dataset.requestId,
+      input_decision: decision,
+      input_review_note: note
+    });
+    button.disabled = false;
+    if (error) return toast(error.message, true);
+    toast(decision === 'approve' ? `Godkänd som version ${revision}. Synk köad till TV:n.` : 'Publiceringsbegäran avslogs.');
+    await loadScreens();
+  }));
   card.querySelectorAll('.restore-publication').forEach(button => button.addEventListener('click', async () => {
     const revisionToRestore = Number(button.dataset.revision);
     if (!Number.isInteger(revisionToRestore) || !confirm(`Återställ version ${revisionToRestore} till ”${screen.name}”? Den publiceras som en ny version och skickas till TV:n.`)) return;
