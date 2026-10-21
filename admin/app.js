@@ -3,6 +3,8 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let draftPreviewItems = [];
+let draftPreviewIndex = 0;
 const authView = $('#authView');
 const appView = $('#appView');
 const screenList = $('#screenList');
@@ -561,8 +563,11 @@ async function loadScreens() {
   channelSchedules = channelScheduleData || [];
   screenCommands = commandData || [];
   const latestPublications = new Map();
+  const publicationHistory = new Map();
   (publicationData || []).forEach(publication => {
     if (!latestPublications.has(publication.screen_id)) latestPublications.set(publication.screen_id, publication);
+    if (!publicationHistory.has(publication.screen_id)) publicationHistory.set(publication.screen_id, []);
+    publicationHistory.get(publication.screen_id).push(publication);
   });
   mediaLibrary = mediaData || [];
   updateChannelControls();
@@ -587,7 +592,7 @@ async function loadScreens() {
     const screenChannelIds = new Set(channelSchedules.filter(item => item.screen_id === screen.id).map(item => item.channel_id));
     const screenChannelPlaylistIds = new Set(channelPlaylists.filter(item => screenChannelIds.has(item.channel_id)).map(item => item.playlist_id));
     const screenChannelSlides = (channelSlideData || []).filter(item => screenChannelPlaylistIds.has(item.playlist_id));
-    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(String(screen.name || '').trim().toLocaleLowerCase('sv-SE')) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides, latestPublications.get(screen.id));
+    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(String(screen.name || '').trim().toLocaleLowerCase('sv-SE')) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides, latestPublications.get(screen.id), publicationHistory.get(screen.id) || []);
   });
   const grouped = new Map();
   screens.forEach((screen, index) => {
@@ -1550,6 +1555,82 @@ function kindLabel(kind) {
   return ({ text: 'Textmeddelande', image: 'Bild', video: 'Video', clock: 'Klocka & datum', feed: 'JSON-feed', web: 'Webbsida / live dashboard', sleep: 'Utanför öppettider', paused: 'Pausad' })[kind] || kind || '—';
 }
 
+function openDraftPreview(screen, slides, channelSlides) {
+  const dialog = $('#draftPreviewDialog');
+  draftPreviewItems = [
+    ...slides.map(item => ({ ...item, previewSource: 'Skärmens grundspellista' })),
+    ...channelSlides.map(item => ({ ...item, previewSource: `Kanalutkast · ${playlists.find(playlist => playlist.id === item.playlist_id)?.name || 'spellista'}` }))
+  ];
+  draftPreviewIndex = 0;
+  $('#draftPreviewTitle').textContent = screen.name;
+  renderDraftPreviewItem();
+  if (!dialog.open) dialog.showModal();
+}
+
+function renderDraftPreviewItem() {
+  const stage = $('[data-preview-stage]');
+  const position = $('[data-preview-position]');
+  const previous = $('[data-preview-prev]');
+  const next = $('[data-preview-next]');
+  const item = draftPreviewItems[draftPreviewIndex];
+  stage.replaceChildren();
+  if (!item) {
+    const empty = document.createElement('div');
+    empty.className = 'draft-preview-empty';
+    empty.textContent = 'Inget innehåll i utkastet ännu.';
+    stage.append(empty);
+    position.textContent = '0 objekt';
+    previous.disabled = true;
+    next.disabled = true;
+    return;
+  }
+
+  const frame = document.createElement('article');
+  frame.className = `draft-preview-frame preview-${item.kind || 'unknown'}`;
+  const badge = document.createElement('span');
+  badge.className = 'draft-preview-source';
+  badge.textContent = item.previewSource;
+  frame.append(badge);
+  if (item.kind === 'image' && /^https?:\/\//i.test(item.source_url || '')) {
+    const media = document.createElement('img');
+    media.src = item.source_url;
+    media.alt = item.title || 'Förhandsvisad bild';
+    frame.append(media);
+  } else if (item.kind === 'video' && /^https?:\/\//i.test(item.source_url || '')) {
+    const media = document.createElement('video');
+    media.src = item.source_url;
+    media.controls = true;
+    media.playsInline = true;
+    frame.append(media);
+  } else {
+    const content = document.createElement('div');
+    content.className = 'draft-preview-copy';
+    const title = document.createElement('h3');
+    title.textContent = item.title || kindLabel(item.kind);
+    content.append(title);
+    const body = document.createElement('p');
+    if (item.kind === 'text') body.textContent = item.body || '';
+    else if (item.kind === 'clock') body.textContent = `${item.body || ''}${item.body ? ' · ' : ''}${new Intl.DateTimeFormat('sv-SE', { dateStyle: 'full', timeStyle: 'short' }).format(new Date())}`;
+    else if (item.kind === 'feed') body.textContent = 'Live-data hämtas av TV-spelaren när innehållet publiceras.';
+    else if (item.kind === 'web') body.textContent = 'Webbsidan öppnas av TV-spelaren efter publicering. Inbäddad förhandsvisning kan blockeras av källans säkerhetsinställningar.';
+    else body.textContent = item.body || 'Förhandsvisning av utkast';
+    content.append(body);
+    frame.append(content);
+  }
+  const caption = document.createElement('span');
+  caption.className = 'draft-preview-caption';
+  caption.textContent = `${kindLabel(item.kind)} · ${Number(item.duration_seconds) || 0} sekunder`;
+  frame.append(caption);
+  stage.append(frame);
+  position.textContent = `${draftPreviewIndex + 1} av ${draftPreviewItems.length}`;
+  previous.disabled = draftPreviewIndex === 0;
+  next.disabled = draftPreviewIndex >= draftPreviewItems.length - 1;
+}
+
+$('#draftPreviewDialog').querySelector('[data-preview-close]').addEventListener('click', () => $('#draftPreviewDialog').close());
+$('[data-preview-prev]').addEventListener('click', () => { draftPreviewIndex = Math.max(0, draftPreviewIndex - 1); renderDraftPreviewItem(); });
+$('[data-preview-next]').addEventListener('click', () => { draftPreviewIndex = Math.min(draftPreviewItems.length - 1, draftPreviewIndex + 1); renderDraftPreviewItem(); });
+
 function formatCommandStatus(command) {
   if (!command) return 'Inga fjärrkommandon ännu.';
   const time = command.completed_at || command.created_at;
@@ -1686,7 +1767,7 @@ function scheduleFields() {
   return `<div class="schedule-fields"><div class="weekday-picker" aria-label="Återkommande veckodagar">${days.map(([value, label]) => `<label><input type="checkbox" name="weekdays" value="${value}" /><span>${label}</span></label>`).join('')}</div><div class="inline-fields"><input class="schedule-input" name="from" type="datetime-local" aria-label="Visa från datum och tid" /><input class="schedule-input" name="until" type="datetime-local" aria-label="Visa till datum och tid" /></div><div class="inline-fields"><input class="schedule-input" name="daily_from" type="time" aria-label="Visa dagligen från" /><input class="schedule-input" name="daily_until" type="time" aria-label="Visa dagligen till" /></div><span class="schedule-help">Valda dagar och klockslag återkommer varje vecka. Lämna tomt för alltid.</span></div>`;
 }
 
-function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, latestCommand = null, channelSlides = [], publication = null) {
+function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, latestCommand = null, channelSlides = [], publication = null, publicationVersions = []) {
   const canAdmin = currentRole === 'admin';
   const canEdit = canAdmin || currentRole === 'editor';
   const card = document.createElement('article');
@@ -1703,9 +1784,10 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   card.innerHTML = `
     <div class="screen-head">
       <div class="screen-title-wrap"><input class="screen-select ${canEdit ? '' : 'hidden'}" type="checkbox" ${selectedScreenIds.has(screen.id) ? 'checked' : ''} aria-label="Välj ${esc(screen.name)}" /><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${esc(screenGroup?.name || 'Ingen grupp')} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · möjlig dubblett (${sameNameCount} med samma namn)` : ''}</div></div></div>
-      <div class="screen-actions">${pending}<button class="button primary small publish-screen ${canEdit ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Publicera</button><button class="button ghost small renew-pairing ${canAdmin ? '' : 'hidden'}">Ny kod</button><button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
+      <div class="screen-actions">${pending}<button class="button ghost small preview-screen" type="button">Förhandsvisa utkast</button><button class="button primary small publish-screen ${canEdit ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Publicera</button><button class="button ghost small renew-pairing ${canAdmin ? '' : 'hidden'}">Ny kod</button><button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
     </div>
     <div class="screen-publication-state">Senast publicerad ${publication ? `version ${esc(publication.revision)} · ${esc(new Date(publication.published_at).toLocaleString('sv-SE'))}` : 'inte ännu'} · ändringar ligger som utkast tills du publicerar.</div>
+    ${publicationVersions.length > 1 ? `<details class="publication-history"><summary>Versionshistorik · ${publicationVersions.length} versioner</summary><div class="publication-history-list">${publicationVersions.map((version, index) => `<div class="publication-history-row"><span><strong>Version ${esc(version.revision)}${index === 0 ? ' · aktuell' : ''}</strong><small>${esc(new Date(version.published_at).toLocaleString('sv-SE'))}</small></span>${index > 0 && canEdit && screen.is_active ? `<button class="button ghost small restore-publication" type="button" data-revision="${esc(version.revision)}">Återställ</button>` : ''}</div>`).join('')}</div><p>Återställning publicerar innehållet som en ny version och synkar det till TV:n. Utkastet i spellistor och kanaler ändras inte.</p></details>` : ''}
     <div class="screen-status-row"><div class="screen-live-status ${isOnline(screen) ? 'online' : 'offline'}"><span class="status-indicator"></span><span class="status-label">${isOnline(screen) ? 'Online nu' : 'Offline'}</span><span class="last-seen">${screen.last_seen_at ? `Senast kontakt ${new Date(screen.last_seen_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Spelaren har inte rapporterat ännu'}</span></div><div class="current-content ${isOnline(screen) ? '' : 'stale'}"><span class="current-content-label">VISAS JUST NU</span><strong class="current-title">${esc(isOnline(screen) ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt')}</strong><span class="current-kind">${esc(isOnline(screen) ? kindLabel(screen.current_kind) : 'Skärmen är offline')}</span><div class="current-preview"></div></div><div class="device-diagnostics">${renderDeviceDiagnostics(screen)}</div></div>
     <div class="screen-body">
       <p class="pair-help">${screen.pair_code ? 'Öppna Signage Player på TV:n och skriv koden ovan. Koden kan bara användas en gång.' : 'TV:n är parkopplad. Publicerat innehåll synkas till spelaren och sparas lokalt för offlinevisning.'}</p>
@@ -1728,6 +1810,20 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
         <div class="add-box"><h3>Webbsida eller live-dashboard</h3><form class="text-slide-form add-web"><input name="title" maxlength="80" placeholder="Namn på sidan" required /><input name="url" type="url" placeholder="https://…" required /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="60" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till sida</button></div>${scheduleFields()}</form></div>
       </div>
     </div>`;
+  card.querySelector('.preview-screen').addEventListener('click', () => openDraftPreview(screen, slides, channelSlides));
+  card.querySelectorAll('.restore-publication').forEach(button => button.addEventListener('click', async () => {
+    const revisionToRestore = Number(button.dataset.revision);
+    if (!Number.isInteger(revisionToRestore) || !confirm(`Återställ version ${revisionToRestore} till ”${screen.name}”? Den publiceras som en ny version och skickas till TV:n.`)) return;
+    button.disabled = true;
+    const { data: revision, error } = await supabase.rpc('restore_screen_publication', {
+      input_screen_id: screen.id,
+      input_revision: revisionToRestore
+    });
+    button.disabled = false;
+    if (error) return toast(error.message, true);
+    toast(`Version ${revisionToRestore} återställd som version ${revision}. Synk köad till spelaren.`);
+    await loadScreens();
+  }));
   card.querySelector('.screen-select').addEventListener('change', event => {
     if (event.currentTarget.checked) selectedScreenIds.add(screen.id);
     else selectedScreenIds.delete(screen.id);

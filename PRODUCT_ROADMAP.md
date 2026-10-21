@@ -17,13 +17,15 @@ See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the researched capability
 | --- | --- | --- |
 | Screens and devices | Pairing/recovery, stable player identity, unique active names, groups, online status, previews, bulk actions, remote restart/sync, device diagnostics, scheduled online/offline history, and downloadable support bundles | Reconcile legacy duplicate profiles; add guided remote troubleshooting and configurable alert thresholds |
 | Content | Text, image, video, web links, JSON feeds, reusable library, expiring media, versioned per-screen publishing snapshots | Approval, robust upload recovery, reusable native app instances |
-| Playlists and channels | Reusable playlists with atomic drag or keyboard ordering, recurring schedules, priority, multi-zone, weekly per-screen channel calendar, per-screen publish versions and queued player sync | Draft preview/restore, approval and playlist-level calendar entries |
+| Playlists and channels | Reusable playlists with atomic drag or keyboard ordering, recurring schedules, priority, multi-zone, weekly per-screen channel calendar, per-screen publish versions and queued player sync | Approval and playlist-level calendar entries |
 | Live data and apps | Native Pulse/JSON feed and web dashboard support; reusable Pulse connections with protected credentials; per-screen feed status, HTTP/network errors, last success and source host | Expand connector catalog with OAuth-backed business apps, refreshable credentials, and setup health checks |
 | Remote screen operations | Set content, temporary cast, sync, restart, and on-demand screenshot capture | Remote settings, support bundle, guided troubleshooting |
 | Team and organization | Roles, screen groups, group-scoped access, audit log | Spaces/locations, granular content permissions and activity export |
 | Playback reporting | Reported player content transitions, per-screen history, estimated display duration, filters and CSV export | Aggregated proof-of-play analytics, per-content totals and scheduled reports |
 | Player fleet | Android TV player, offline cache and autostart | Managed kiosk mode, player update channel, compatibility matrix and recovery workflow |
 | Creation tools | Structured text and feed presentation | Template-based canvas/editor and reusable branded layouts |
+
+Screen draft preview and append-only restore are available in the screen cards; restoring an older revision queues it as a new publication and leaves editable drafts untouched.
 
 ## Delivery order
 
