@@ -746,11 +746,20 @@ function screenLocationOptions(selectedId = '', includeNone = true) {
 
 function renderLocations() {
   const admin = currentRole === 'admin';
+  const locationFilter = $('#locationFilter');
+  const previousFilter = locationFilter.value;
+  locationFilter.innerHTML = `<option value="all">Alla platser</option><option value="unassigned">Ingen plats</option>${locations.map(location => `<option value="${esc(location.id)}">${esc(location.name)}</option>`).join('')}`;
+  locationFilter.value = previousFilter === 'all' || previousFilter === 'unassigned' || locations.some(location => location.id === previousFilter) ? previousFilter : 'all';
   const locationSelect = $('#newScreenLocation');
   const previousLocation = locationSelect.value;
   locationSelect.innerHTML = screenLocationOptions(previousLocation);
   if (locations.some(location => location.id === previousLocation)) locationSelect.value = previousLocation;
   else if (locations.length) locationSelect.value = locations[0].id;
+  const bulkLocation = $('#bulkScreenLocation');
+  const previousBulkLocation = bulkLocation.value;
+  bulkLocation.innerHTML = `<option value="__skip__">Välj plats</option><option value="">Ingen plats</option>${locations.map(location => `<option value="${esc(location.id)}">${esc(location.name)}</option>`).join('')}`;
+  if (previousBulkLocation === '__skip__' || previousBulkLocation === '' || locations.some(location => location.id === previousBulkLocation)) bulkLocation.value = previousBulkLocation;
+  else bulkLocation.value = '__skip__';
 
   const list = $('#locationList');
   list.replaceChildren(...locations.map(location => {
@@ -1489,6 +1498,7 @@ function updateScreenSummary() {
 
 $('#screenSearch').addEventListener('input', applyScreenFilters);
 $('#screenFilter').addEventListener('change', applyScreenFilters);
+$('#locationFilter').addEventListener('change', applyScreenFilters);
 $('#groupFilter').addEventListener('change', applyScreenFilters);
 $('#selectVisibleScreens').addEventListener('click', () => {
   const visibleCards = [...screenList.querySelectorAll('.screen-card:not(.hidden)')].filter(isCardVisible);
@@ -1510,10 +1520,12 @@ $('#clearScreenSelection').addEventListener('click', () => {
 });
 document.querySelectorAll('[data-bulk-command]').forEach(button => button.addEventListener('click', () => queueBulkPlayerCommand(button.dataset.bulkCommand, button)));
 $('#assignSelectedGroup').addEventListener('click', assignSelectedScreensToGroup);
+$('#assignSelectedLocation').addEventListener('click', assignSelectedScreensToLocation);
 
 function applyScreenFilters() {
   const query = $('#screenSearch').value.trim().toLocaleLowerCase('sv-SE');
   const filter = $('#screenFilter').value;
+  const selectedLocation = $('#locationFilter').value;
   const selectedGroup = $('#groupFilter').value;
   const visible = [];
   screenList.querySelectorAll('.screen-card').forEach(card => {
@@ -1526,7 +1538,10 @@ function applyScreenFilters() {
     const matchesGroup = selectedGroup === 'all'
       || (selectedGroup === 'ungrouped' && !screen?.group_id)
       || (screen?.group_id === selectedGroup);
-    const show = matchesName && matchesStatus && matchesGroup;
+    const matchesLocation = selectedLocation === 'all'
+      || (selectedLocation === 'unassigned' && !screen?.location_id)
+      || screen?.location_id === selectedLocation;
+    const show = matchesName && matchesStatus && matchesGroup && matchesLocation;
     card.classList.toggle('hidden', !show);
     if (show) visible.push(card);
   });
@@ -1557,6 +1572,28 @@ async function assignSelectedScreensToGroup() {
   } finally {
     button.disabled = false;
   }
+}
+
+async function assignSelectedScreensToLocation() {
+  if (currentRole !== 'admin' || selectedScreenIds.size === 0) return;
+  const value = $('#bulkScreenLocation').value;
+  if (value === '__skip__') return toast('Välj en plats eller ”Ingen plats”.', true);
+  const location_id = value || null;
+  const targets = screens.filter(screen => selectedScreenIds.has(screen.id));
+  const button = $('#assignSelectedLocation');
+  button.disabled = true;
+  const failures = [];
+  try {
+    for (const screen of targets) {
+      const { error } = await supabase.from('screens').update({ location_id }).eq('id', screen.id);
+      if (error) failures.push(screen.name);
+    }
+    const locationName = locations.find(location => location.id === location_id)?.name || 'Ingen plats';
+    toast(`${targets.length - failures.length} skärmar flyttades till ”${locationName}”.${failures.length ? ` Misslyckades: ${failures.join(', ')}.` : ''}`, failures.length > 0);
+  } finally {
+    button.disabled = false;
+  }
+  await loadScreens();
 }
 
 function isCardVisible(card) {
