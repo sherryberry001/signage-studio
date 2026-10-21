@@ -541,7 +541,7 @@ $('#screenGroupList').addEventListener('click', async event => {
   if (!button || currentRole !== 'admin') return;
   const group = screenGroups.find(item => item.id === button.dataset.screenGroupDelete);
   if (!group) return;
-  const count = screens.filter(screen => screen.group_id === group.id).length;
+  const count = logicalScreens().filter(screen => screen.group_id === group.id).length;
   const effect = count ? ` ${count} skärmar flyttas till ”Ingen grupp”; innehåll och parkopplingar behålls.` : '';
   if (!confirm(`Ta bort gruppen ”${group.name}”?${effect}`)) return;
   const { error } = await supabase.from('screen_groups').delete().eq('id', group.id);
@@ -965,7 +965,7 @@ async function loadScreens() {
   }
   const duplicateNames = new Map();
   screens.forEach(screen => {
-    const key = String(screen.name || '').trim().toLocaleLowerCase('sv-SE');
+    const key = screenProfileKey(screen);
     duplicateNames.set(key, (duplicateNames.get(key) || 0) + 1);
   });
   const cards = screens.map((screen, index) => {
@@ -974,26 +974,20 @@ async function loadScreens() {
     const screenChannelIds = new Set(channelSchedules.filter(item => item.screen_id === screen.id).map(item => item.channel_id));
     const screenChannelPlaylistIds = new Set(channelPlaylists.filter(item => screenChannelIds.has(item.channel_id)).map(item => item.playlist_id));
     const screenChannelSlides = (channelSlideData || []).filter(item => screenChannelPlaylistIds.has(item.playlist_id));
-    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(String(screen.name || '').trim().toLocaleLowerCase('sv-SE')) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides, latestPublications.get(screen.id), publicationHistory.get(screen.id) || [], (approvalData || []).filter(request => request.screen_id === screen.id));
+    return renderScreen(screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(screenProfileKey(screen)) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides, latestPublications.get(screen.id), publicationHistory.get(screen.id) || [], (approvalData || []).filter(request => request.screen_id === screen.id));
   });
-  const grouped = new Map();
-  screens.forEach((screen, index) => {
-    const key = String(screen.name || '').trim().toLocaleLowerCase('sv-SE') || `screen-${screen.id}`;
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key).push({ screen, card: cards[index] });
-  });
+  const grouped = screenProfileGroups(screens).map(entries => entries.map(screen => ({
+    screen,
+    card: cards[screens.findIndex(item => item.id === screen.id)]
+  })));
   const rows = [];
-  for (const entries of grouped.values()) {
+  for (const entries of grouped) {
     if (entries.length === 1) { rows.push(entries[0].card); continue; }
-    // Keep the live/paired device as the main card; retain all other records in a collapsed group.
-    entries.sort((a, b) => Number(isOnline(b.screen)) - Number(isOnline(a.screen))
-      || Number(Boolean(a.screen.pair_code)) - Number(Boolean(b.screen.pair_code))
-      || Number(Boolean(b.screen.activated_at)) - Number(Boolean(a.screen.activated_at))
-      || new Date(b.screen.created_at || 0) - new Date(a.screen.created_at || 0));
+    entries.sort((a, b) => compareScreenProfiles(a.screen, b.screen));
     rows.push(entries[0].card);
     const duplicates = document.createElement('details');
     duplicates.className = 'duplicate-screen-group';
-    duplicates.innerHTML = `<summary>Fler skärmprofiler för ”${esc(entries[0].screen.name || 'Skärm')}” <span>${entries.length - 1}</span></summary><div class="duplicate-screen-items"></div>`;
+    duplicates.innerHTML = `<summary>Äldre profiler för ”${esc(entries[0].screen.name || 'Skärm')}” · ${entries.length - 1} dolda <span>Visa</span></summary><div class="duplicate-screen-items"></div>`;
     const items = duplicates.querySelector('.duplicate-screen-items');
     entries.slice(1).forEach(entry => items.append(entry.card));
     rows.push(duplicates);
@@ -1062,7 +1056,7 @@ function renderLocations() {
 
   const list = $('#locationList');
   list.replaceChildren(...locations.map(location => {
-    const screensInLocation = screens.filter(screen => screen.location_id === location.id);
+    const screensInLocation = logicalScreens().filter(screen => screen.location_id === location.id);
     const members = locationMembers.filter(member => member.location_id === location.id);
     const assignedUsers = new Set(members.map(member => member.user_id));
     const availableMembers = teamMembers.filter(member => member.role === 'group_member' && !assignedUsers.has(member.user_id));
@@ -1085,7 +1079,7 @@ function renderScreenGroups() {
   const admin = currentRole === 'admin';
   const list = $('#screenGroupList');
   list.replaceChildren(...screenGroups.map(group => {
-    const count = screens.filter(screen => screen.group_id === group.id).length;
+    const count = logicalScreens().filter(screen => screen.group_id === group.id).length;
     const memberships = screenGroupMembers.filter(item => item.group_id === group.id);
     const row = document.createElement('div');
     row.className = 'screen-group-item';
@@ -1129,9 +1123,11 @@ function calendarDateLabel(date, options = { day: 'numeric', month: 'short' }) {
 function updateChannelCalendarScreens() {
   const select = $('#channelCalendarScreen');
   if (!select) return;
-  const selected = select.value || 'all';
-  select.innerHTML = `<option value="all">Alla skärmar</option>${screens.map(screen => `<option value="${esc(screen.id)}">${esc(screen.name)}${screenGroups.find(group => group.id === screen.group_id) ? ` · ${esc(screenGroups.find(group => group.id === screen.group_id).name)}` : ''}</option>`).join('')}`;
-  select.value = screens.some(screen => screen.id === selected) ? selected : 'all';
+  const previous = screens.find(screen => screen.id === select.value);
+  const selected = previous ? logicalScreenFor(previous.id)?.id : select.value || 'all';
+  const availableScreens = logicalScreens();
+  select.innerHTML = `<option value="all">Alla skärmar</option>${availableScreens.map(screen => `<option value="${esc(screen.id)}">${esc(screen.name)}${screenGroups.find(group => group.id === screen.group_id) ? ` · ${esc(screenGroups.find(group => group.id === screen.group_id).name)}` : ''}</option>`).join('')}`;
+  select.value = availableScreens.some(screen => screen.id === selected) ? selected : 'all';
 }
 
 function scheduleDaySegments(schedule, dayStart) {
@@ -1162,9 +1158,11 @@ function findScheduleConflicts(entries, dayStart) {
   const conflicts = new Map();
   const byScreen = new Map();
   entries.forEach(schedule => {
-    const group = byScreen.get(schedule.screen_id) || [];
+    const screen = screens.find(item => item.id === schedule.screen_id);
+    const key = screen ? screenProfileKey(screen) : schedule.screen_id;
+    const group = byScreen.get(key) || [];
     group.push(schedule);
-    byScreen.set(schedule.screen_id, group);
+    byScreen.set(key, group);
   });
   byScreen.forEach(group => {
     for (let leftIndex = 0; leftIndex < group.length; leftIndex++) {
@@ -1198,7 +1196,23 @@ function renderChannelCalendar() {
   const rangeOptions = { day: 'numeric', month: 'long' };
   range.textContent = `${calendarDateLabel(days[0], rangeOptions)} – ${calendarDateLabel(end, rangeOptions)} ${end.getFullYear()}`;
   const selectedScreen = $('#channelCalendarScreen').value;
-  const visibleSchedules = channelSchedules.filter(schedule => selectedScreen === 'all' || schedule.screen_id === selectedScreen);
+  const selectedScreenIds = selectedScreen === 'all' ? null : new Set(screenProfileIds(selectedScreen));
+  const visibleSchedulesByKey = new Map();
+  channelSchedules.filter(schedule => !selectedScreenIds || selectedScreenIds.has(schedule.screen_id)).forEach(schedule => {
+    const screen = screens.find(item => item.id === schedule.screen_id);
+    const key = JSON.stringify([
+      screen ? screenProfileKey(screen) : schedule.screen_id,
+      schedule.channel_id,
+      Number(schedule.priority),
+      schedule.active_from || null,
+      schedule.active_until || null,
+      schedule.daily_start_time || null,
+      schedule.daily_end_time || null,
+      [...(schedule.weekdays || [])].map(Number).sort((a, b) => a - b)
+    ]);
+    if (!visibleSchedulesByKey.has(key)) visibleSchedulesByKey.set(key, schedule);
+  });
+  const visibleSchedules = [...visibleSchedulesByKey.values()];
   grid.innerHTML = days.map(day => {
     const weekday = ((day.getDay() + 6) % 7) + 1;
     const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate());
@@ -1211,7 +1225,7 @@ function renderChannelCalendar() {
     }).sort((a, b) => String(a.daily_start_time || '').localeCompare(String(b.daily_start_time || '')) || Number(a.priority) - Number(b.priority));
     const conflicts = findScheduleConflicts(entries, dayStart);
     const items = entries.map(schedule => {
-      const screen = screens.find(item => item.id === schedule.screen_id);
+      const screen = logicalScreenFor(schedule.screen_id) || screens.find(item => item.id === schedule.screen_id);
       const channel = channels.find(item => item.id === schedule.channel_id);
       if (!screen || !channel) return '';
       const time = schedule.daily_start_time && schedule.daily_end_time
@@ -1237,7 +1251,7 @@ function renderPlaylistLibrary() {
   const canEdit = ['admin', 'editor'].includes(currentRole);
   container.replaceChildren(...playlists.map(playlist => {
     const items = playlistSlides.filter(item => item.playlist_id === playlist.id);
-    const screenCount = screens.filter(screen => screen.playlist_id === playlist.id).length;
+    const screenCount = new Set(screens.filter(screen => screen.playlist_id === playlist.id).map(screenProfileKey)).size;
     const channelCount = channelPlaylists.filter(item => item.playlist_id === playlist.id).length;
     const card = document.createElement('article');
     card.className = 'playlist-manage-card';
@@ -1658,9 +1672,11 @@ async function loadActivityLog() {
 function renderPlaybackScreenOptions() {
   const select = $('#playbackScreen');
   if (!select) return;
-  const previous = select.value || 'all';
-  select.innerHTML = `<option value="all">Alla tillgängliga skärmar</option>${screens.map(screen => `<option value="${esc(screen.id)}">${esc(screen.name)}</option>`).join('')}`;
-  select.value = screens.some(screen => screen.id === previous) ? previous : 'all';
+  const previousScreen = screens.find(screen => screen.id === select.value);
+  const previous = previousScreen ? logicalScreenFor(previousScreen.id)?.id : select.value || 'all';
+  const availableScreens = logicalScreens();
+  select.innerHTML = `<option value="all">Alla TV-apparater</option>${availableScreens.map(screen => `<option value="${esc(screen.id)}">${esc(screen.name)}</option>`).join('')}`;
+  select.value = availableScreens.some(screen => screen.id === previous) ? previous : 'all';
 }
 
 function filteredPlaybackEvents() {
@@ -1672,7 +1688,7 @@ function renderPlaybackEvents() {
   const list = $('#playbackList');
   if (!list) return;
   const rows = filteredPlaybackEvents();
-  const screenCount = new Set(rows.map(event => event.screen_id || event.screen_name)).size;
+  const screenCount = new Set(rows.map(event => String(event.screen_name || event.screen_id || '').trim().toLocaleLowerCase('sv-SE'))).size;
   const completedMs = rows.reduce((total, event) => total + (event.ended_at ? Math.max(0, new Date(event.ended_at) - new Date(event.started_at)) : 0), 0);
   $('#playbackSummary').innerHTML = `<span><strong>${rows.length}</strong> händelser i listan</span><span><strong>${screenCount}</strong> skärmar i listan</span><span><strong>${Math.round(completedMs / 60000)}</strong> min registrerad tid i listan</span>`;
   if (!rows.length) {
@@ -1717,19 +1733,32 @@ async function loadPlaybackEvents() {
     .gte('started_at', start).lt('started_at', end)
     .order('started_at', { ascending: false }).order('id', { ascending: false }).limit(1000);
   const screenId = $('#playbackScreen').value;
-  if (screenId !== 'all') query = query.eq('screen_id', screenId);
-  const [historyResult, aggregateResult] = await Promise.all([
+  const profileIds = screenId === 'all' ? [] : screenProfileIds(screenId);
+  if (profileIds.length) query = query.in('screen_id', profileIds);
+  const [historyResult, aggregateResults] = await Promise.all([
     query,
-    supabase.rpc('team_playback_summary', {
+    Promise.all((profileIds.length ? profileIds : [null]).map(input_screen_id => supabase.rpc('team_playback_summary', {
       input_from: start,
       input_to: end,
-      input_screen_id: screenId === 'all' ? null : screenId
-    })
+      input_screen_id
+    })))
   ]);
   if (historyResult.error) return toast(historyResult.error.message, true);
-  if (aggregateResult.error) return toast(aggregateResult.error.message, true);
+  const aggregateError = aggregateResults.find(result => result.error)?.error;
+  if (aggregateError) return toast(aggregateError.message, true);
   playbackEvents = historyResult.data || [];
-  playbackAggregates = aggregateResult.data || [];
+  if (profileIds.length <= 1) playbackAggregates = aggregateResults[0]?.data || [];
+  else {
+    const grouped = new Map();
+    aggregateResults.flatMap(result => result.data || []).forEach(item => {
+      const key = `${item.slide_id || ''}:${item.content_title}:${item.content_kind || ''}`;
+      const current = grouped.get(key) || { ...item, screen_count: 1, playback_count: 0, reported_seconds: 0 };
+      current.playback_count += Number(item.playback_count) || 0;
+      current.reported_seconds += Number(item.reported_seconds) || 0;
+      grouped.set(key, current);
+    });
+    playbackAggregates = [...grouped.values()].sort((a, b) => Number(b.reported_seconds) - Number(a.reported_seconds));
+  }
   renderPlaybackEvents();
   renderPlaybackAggregates();
 }
@@ -1861,6 +1890,49 @@ function isOnline(screen) {
   return Boolean(screen.last_seen_at && Date.now() - new Date(screen.last_seen_at).getTime() < 45_000);
 }
 
+function screenProfileKey(screen) {
+  return String(screen?.name || '').trim().toLocaleLowerCase('sv-SE') || `screen-${screen?.id || 'unknown'}`;
+}
+
+function compareScreenProfiles(left, right) {
+  return Number(isOnline(right)) - Number(isOnline(left))
+    || Number(Boolean(right.device_identity)) - Number(Boolean(left.device_identity))
+    || Number(Boolean(left.pair_code)) - Number(Boolean(right.pair_code))
+    || Number(Boolean(right.activated_at)) - Number(Boolean(left.activated_at))
+    || new Date(right.created_at || 0) - new Date(left.created_at || 0);
+}
+
+function screenProfileGroups(source = screens) {
+  const groups = new Map();
+  source.forEach(screen => {
+    const key = screenProfileKey(screen);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(screen);
+  });
+  return [...groups.values()];
+}
+
+function logicalScreens(source = screens) {
+  return screenProfileGroups(source).map(group => [...group].sort(compareScreenProfiles)[0]);
+}
+
+function screenProfileIds(screenId) {
+  const selected = screens.find(screen => screen.id === screenId);
+  if (!selected) return [];
+  return screens.filter(screen => screenProfileKey(screen) === screenProfileKey(selected)).map(screen => screen.id);
+}
+
+function selectedLogicalScreens() {
+  const selectedKeys = new Set(screens.filter(screen => selectedScreenIds.has(screen.id)).map(screenProfileKey));
+  return logicalScreens().filter(screen => selectedKeys.has(screenProfileKey(screen)));
+}
+
+function logicalScreenFor(screenId) {
+  const selected = screens.find(screen => screen.id === screenId);
+  if (!selected) return null;
+  return logicalScreens().find(screen => screenProfileKey(screen) === screenProfileKey(selected)) || selected;
+}
+
 function formatAlertAge(value) {
   if (!value) return 'aldrig ansluten';
   const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60000));
@@ -1929,7 +2001,7 @@ function collectOperationalAlerts() {
   screenCommands.forEach(command => {
     if (!latestCommands.has(command.screen_id)) latestCommands.set(command.screen_id, command);
   });
-  screens.filter(screen => screen.is_active).forEach(screen => {
+  logicalScreens().filter(screen => screen.is_active).forEach(screen => {
     const lastContact = screen.last_seen_at || screen.created_at;
     const offlineForMs = lastContact ? now - new Date(lastContact).getTime() : Number.POSITIVE_INFINITY;
     if (!isOnline(screen) && offlineForMs >= offlineThresholdMs) {
@@ -1952,9 +2024,13 @@ function collectOperationalAlerts() {
   });
   const recentFeedErrors = integrationStatuses.filter(item => item.status !== 'ok'
     && item.last_attempt_at && now - new Date(item.last_attempt_at).getTime() < feedErrorWindowMs);
+  const seenFeedAlerts = new Set();
   recentFeedErrors.forEach(feed => {
     const screen = screens.find(item => item.id === feed.screen_id);
     if (!screen?.is_active) return;
+    const alertKey = `${screenProfileKey(screen)}:${feed.slide_id || feed.feed_title}`;
+    if (seenFeedAlerts.has(alertKey)) return;
+    seenFeedAlerts.add(alertKey);
     const reason = feed.status === 'http_error' ? `HTTP-fel${feed.last_http_status ? ` ${feed.last_http_status}` : ''}`
       : feed.status === 'invalid_json' ? 'Svaret är inte giltig JSON' : 'Nätverksfel vid hämtning';
     alerts.push({ kind: 'feed', severity: 2, screen, title: 'Live-data har fel', detail: `${feed.feed_title} · ${reason}` });
@@ -2004,8 +2080,10 @@ $('#operationalAlerts').addEventListener('click', event => {
 });
 
 function updateScreenSummary() {
-  const online = screens.filter(isOnline).length;
-  $('#screenCount').textContent = `${screens.length} ${screens.length === 1 ? 'skärm' : 'skärmar'} · ${online} online`;
+  const devices = logicalScreens();
+  const online = devices.filter(isOnline).length;
+  const hiddenProfiles = screens.length - devices.length;
+  $('#screenCount').textContent = `${devices.length} ${devices.length === 1 ? 'TV' : 'TV-apparater'} · ${online} online${hiddenProfiles ? ` · ${hiddenProfiles} äldre profiler dolda` : ''}`;
   renderOperationalAlerts();
 }
 
@@ -2068,9 +2146,11 @@ function applyScreenFilters() {
     if (show) visible.push(card);
   });
   screenList.querySelectorAll('.duplicate-screen-group').forEach(group => {
-    group.classList.toggle('hidden', !group.querySelector('.screen-card:not(.hidden)'));
+    const hasMatch = Boolean(group.querySelector('.screen-card:not(.hidden)'));
+    group.classList.toggle('hidden', !hasMatch);
+    if (hasMatch && group.previousElementSibling?.classList.contains('hidden')) group.open = true;
   });
-  $('#visibleScreenCount').textContent = `${visible.length} visade`;
+  $('#visibleScreenCount').textContent = `${visible.length} profiler visade`;
   updateBulkScreenActions();
 }
 
@@ -2079,7 +2159,7 @@ async function assignSelectedScreensToGroup() {
   const value = $('#bulkScreenGroup').value;
   if (value === '__skip__') return toast('Välj en grupp eller ”Ingen grupp”.', true);
   const group_id = value || null;
-  const targets = screens.filter(screen => selectedScreenIds.has(screen.id));
+  const targets = selectedLogicalScreens();
   const button = $('#assignSelectedGroup');
   button.disabled = true;
   const failures = [];
@@ -2101,7 +2181,7 @@ async function assignSelectedScreensToLocation() {
   const value = $('#bulkScreenLocation').value;
   if (value === '__skip__') return toast('Välj en plats eller ”Ingen plats”.', true);
   const location_id = value || null;
-  const targets = screens.filter(screen => selectedScreenIds.has(screen.id));
+  const targets = selectedLogicalScreens();
   const button = $('#assignSelectedLocation');
   button.disabled = true;
   const failures = [];
@@ -2129,14 +2209,14 @@ function updateBulkScreenActions() {
   const actions = $('#bulkScreenActions');
   if (!actions) return;
   actions.classList.toggle('hidden', !canOperate || selectedScreenIds.size === 0);
-  $('#selectedScreenCount').textContent = `${selectedScreenIds.size} valda`;
+  $('#selectedScreenCount').textContent = `${selectedLogicalScreens().length} TV-apparater valda`;
   const visibleCards = [...screenList.querySelectorAll('.screen-card:not(.hidden)')].filter(isCardVisible);
   const allVisibleSelected = visibleCards.length > 0 && visibleCards.every(card => selectedScreenIds.has(card.dataset.screenId));
   $('#selectVisibleScreens').textContent = allVisibleSelected ? 'Avmarkera synliga' : 'Välj synliga';
 }
 
 async function queueBulkPlayerCommand(command, button) {
-  const selected = screens.filter(screen => selectedScreenIds.has(screen.id));
+  const selected = selectedLogicalScreens();
   const active = selected.filter(screen => screen.is_active);
   if (!active.length) return toast('Markera minst en aktiv skärm.', true);
   button.disabled = true;
@@ -2158,7 +2238,7 @@ async function queueBulkPlayerCommand(command, button) {
 
 async function publishSelectedScreens() {
   if (!['admin', 'editor'].includes(currentRole) || selectedScreenIds.size === 0) return;
-  const selected = screens.filter(screen => selectedScreenIds.has(screen.id));
+  const selected = selectedLogicalScreens();
   const active = selected.filter(screen => screen.is_active);
   if (!active.length) return toast('Markera minst en aktiv skärm.', true);
   const action = currentRole === 'admin' ? 'publicera utkast på' : 'skicka utkast till admin för';
@@ -2389,7 +2469,7 @@ function supportsScheduledBroadcasts(playerVersion) {
 async function sendScreenBroadcast(event) {
   event.preventDefault();
   if (!['admin', 'editor'].includes(currentRole)) return;
-  const selected = screens.filter(screen => selectedScreenIds.has(screen.id));
+  const selected = selectedLogicalScreens();
   const active = selected.filter(screen => screen.is_active && screen.activated_at);
   if (!active.length) return toast('Markera minst en parkopplad, aktiv skärm.', true);
   if (active.length > 100) return toast('Ett utskick kan gå till högst 100 skärmar åt gången.', true);
@@ -3222,7 +3302,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   const screenGroup = screenGroups.find(group => group.id === screen.group_id);
   card.innerHTML = `
     <div class="screen-head">
-      <div class="screen-title-wrap"><input class="screen-select ${canEdit ? '' : 'hidden'}" type="checkbox" ${selectedScreenIds.has(screen.id) ? 'checked' : ''} aria-label="Välj ${esc(screen.name)}" /><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${esc(screenGroup?.name || 'Ingen grupp')} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · möjlig dubblett (${sameNameCount} med samma namn)` : ''}</div></div></div>
+      <div class="screen-title-wrap"><input class="screen-select ${canEdit ? '' : 'hidden'}" type="checkbox" ${selectedScreenIds.has(screen.id) ? 'checked' : ''} aria-label="Välj ${esc(screen.name)}" /><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${esc(screenGroup?.name || 'Ingen grupp')} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · ${sameNameCount} profiler med samma namn` : ''}</div></div></div>
       <div class="screen-actions">${pending}<button class="button ghost small preview-screen" type="button">Förhandsvisa utkast</button><button class="button primary small request-publish-screen ${!canAdmin && canEdit ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Skicka för godkännande</button><button class="button primary small publish-screen ${canAdmin ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Publicera</button><button class="button ghost small renew-pairing ${canAdmin ? '' : 'hidden'}">Ny kod</button><button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
     </div>
     <div class="screen-publication-state">Senast publicerad ${publication ? `version ${esc(publication.revision)} · ${esc(new Date(publication.published_at).toLocaleString('sv-SE'))}` : 'inte ännu'} · ${esc(publicationDeliverySummary(screen, publication))} · ändringar ligger som utkast tills du publicerar.</div>
