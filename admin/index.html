@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261124-scheduled-media-broadcast-v1" />
-    <script type="module" src="./app.js?v=20261124-scheduled-media-broadcast-v1"></script>
+    <link rel="stylesheet" href="./style.css?v=20261125-playback-offline-v1" />
+    <script type="module" src="./app.js?v=20261125-playback-offline-v1"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -102,7 +102,7 @@
           <div id="activityList" class="activity-list" aria-live="polite"></div>
         </section>
         <section id="playbackPanel" class="activity-panel hidden" data-workspace-panel="proof">
-          <div class="activity-heading"><div><strong>Uppspelningshistorik</strong><span>Spelaren rapporterar när den byter innehåll. Tiderna visar rapporterade övergångar och uppskattad visningstid.</span></div><div class="playback-actions"><button id="exportPlayback" class="button ghost small" type="button">Exportera CSV</button><button id="refreshPlayback" class="button ghost small" type="button">↻ Uppdatera</button></div></div>
+          <div class="activity-heading"><div><strong>Uppspelningshistorik</strong><span>Spelaren rapporterar innehållsbyten. Vid offline stannar visningstiden vid senaste kontakt och fortsätter som en ny period efter återanslutning.</span></div><div class="playback-actions"><button id="exportPlayback" class="button ghost small" type="button">Exportera CSV</button><button id="refreshPlayback" class="button ghost small" type="button">↻ Uppdatera</button></div></div>
           <div class="activity-tools playback-tools"><label>Från <input id="playbackFrom" type="date" /></label><label>Till <input id="playbackTo" type="date" /></label><select id="playbackScreen" aria-label="Filtrera skärm"><option value="all">Alla tillgängliga skärmar</option></select><input id="playbackSearch" type="search" placeholder="Sök innehåll eller skärm…" aria-label="Sök uppspelning" /></div>
           <div id="playbackSummary" class="playback-summary"></div>
           <div id="playbackList" class="activity-list" aria-live="polite"></div>
