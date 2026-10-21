@@ -1800,6 +1800,7 @@ $('#clearScreenSelection').addEventListener('click', () => {
   updateBulkScreenActions();
 });
 document.querySelectorAll('[data-bulk-command]').forEach(button => button.addEventListener('click', () => queueBulkPlayerCommand(button.dataset.bulkCommand, button)));
+$('#publishSelectedScreens').addEventListener('click', publishSelectedScreens);
 $('#assignSelectedGroup').addEventListener('click', assignSelectedScreensToGroup);
 $('#assignSelectedLocation').addEventListener('click', assignSelectedScreensToLocation);
 
@@ -1913,6 +1914,39 @@ async function queueBulkPlayerCommand(command, button) {
   } finally {
     button.disabled = false;
   }
+}
+
+async function publishSelectedScreens() {
+  if (!['admin', 'editor'].includes(currentRole) || selectedScreenIds.size === 0) return;
+  const selected = screens.filter(screen => selectedScreenIds.has(screen.id));
+  const active = selected.filter(screen => screen.is_active);
+  if (!active.length) return toast('Markera minst en aktiv skärm.', true);
+  const action = currentRole === 'admin' ? 'publicera utkast på' : 'skicka utkast till admin för';
+  if (!confirm(`Vill du ${action} ${active.length} aktiva skärmar? Varje skärm behandlas separat och tidigare innehåll ligger kvar om en publicering misslyckas.`)) return;
+
+  const button = $('#publishSelectedScreens');
+  button.disabled = true;
+  button.textContent = currentRole === 'admin' ? 'Publicerar…' : 'Skickar…';
+  const failures = [];
+  let completed = 0;
+  try {
+    for (const screen of active) {
+      const rpc = currentRole === 'admin' ? 'publish_screen_content' : 'request_screen_publication';
+      const { error } = await supabase.rpc(rpc, { input_screen_id: screen.id });
+      if (error) failures.push(`${screen.name}: ${error.message}`);
+      else completed++;
+    }
+    const paused = selected.length - active.length;
+    const summary = currentRole === 'admin'
+      ? `${completed} av ${active.length} utkast publicerade; synk har köats`
+      : `${completed} av ${active.length} utkast skickade till admin`;
+    const details = [paused ? `${paused} pausade skärmar hoppades över` : '', failures.length ? `Misslyckades: ${failures.join('; ')}` : ''].filter(Boolean).join('. ');
+    toast(`${summary}.${details ? ` ${details}.` : ''}`, failures.length > 0);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Publicera valda utkast';
+  }
+  await loadScreens();
 }
 
 async function refreshScreenStatus() {
