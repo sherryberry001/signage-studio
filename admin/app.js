@@ -165,6 +165,13 @@ let playbackEvents = [];
 let playbackAggregates = [];
 let integrationStatuses = [];
 let signageIntegrations = [];
+const defaultOperationalSettings = {
+  offline_alert_after_minutes: 3,
+  command_alert_after_minutes: 2,
+  feed_error_window_minutes: 15
+};
+let operationalSettings = { ...defaultOperationalSettings };
+let operationalSettingsAvailable = true;
 let currentRole = null;
 let statusTimer = null;
 let alertTimer = null;
@@ -273,6 +280,8 @@ function setSession(user) {
   appView.classList.toggle('hidden', !user);
   if (user) {
     if (!sameUser) {
+      operationalSettings = { ...defaultOperationalSettings };
+      operationalSettingsAvailable = true;
       screenBroadcasts = [];
       screenBroadcastDelivery = [];
       screenBroadcastDeliveryAvailable = true;
@@ -292,6 +301,8 @@ function setSession(user) {
     refreshOperationalAlerts();
     alertTimer = setInterval(refreshOperationalAlerts, 60000);
   } else {
+    operationalSettings = { ...defaultOperationalSettings };
+    operationalSettingsAvailable = true;
     screensLoadId++;
     screens = [];
     screenGroups = [];
@@ -766,7 +777,8 @@ async function loadScreens() {
     { data: groupMemberData, error: groupMemberError },
     { data: locationData, error: locationError },
     { data: locationMemberData, error: locationMemberError },
-    { data: broadcastData, error: broadcastError }
+    { data: broadcastData, error: broadcastError },
+    { data: operationalSettingsData, error: operationalSettingsError }
   ] = await Promise.all([
     supabase.from('screens').select('*').order('created_at', { ascending: false }),
     supabase.from('playlists').select('*').order('name', { ascending: true }),
@@ -784,7 +796,8 @@ async function loadScreens() {
     supabase.from('screen_group_members').select('id,group_id,user_id,created_at').order('created_at', { ascending: true }),
     supabase.from('locations').select('id,name,description,created_at').order('name', { ascending: true }),
     supabase.from('location_members').select('id,location_id,user_id,created_at').order('created_at', { ascending: true }),
-    supabase.from('screen_broadcasts').select('id,slide_id,title,body,kind,source_url,duration_seconds,starts_at,ends_at,created_at,cancelled_at,screen_broadcast_targets(screen_id,superseded_at)').is('cancelled_at', null).gt('ends_at', new Date().toISOString()).order('starts_at', { ascending: true }).limit(100)
+    supabase.from('screen_broadcasts').select('id,slide_id,title,body,kind,source_url,duration_seconds,starts_at,ends_at,created_at,cancelled_at,screen_broadcast_targets(screen_id,superseded_at)').is('cancelled_at', null).gt('ends_at', new Date().toISOString()).order('starts_at', { ascending: true }).limit(100),
+    supabase.from('team_operational_settings').select('offline_alert_after_minutes,command_alert_after_minutes,feed_error_window_minutes').eq('id', true).maybeSingle()
   ]);
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
@@ -862,6 +875,9 @@ async function loadScreens() {
   channelSchedules = channelScheduleData || [];
   screenCommands = commandData || [];
   screenBroadcasts = broadcastError ? [] : (broadcastData || []);
+  operationalSettingsAvailable = !operationalSettingsError;
+  operationalSettings = { ...defaultOperationalSettings, ...(operationalSettingsData || {}) };
+  renderOperationalAlertSettings();
   await loadScreenBroadcastDelivery();
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   screenPublications = publicationData || [];
@@ -1760,31 +1776,87 @@ function formatAlertAge(value) {
   return `${Math.floor(hours / 24)} dagar sedan`;
 }
 
+function renderOperationalAlertSettings() {
+  const form = $('#operationalAlertSettingsForm');
+  if (!form) return;
+  Object.keys(defaultOperationalSettings).forEach(key => {
+    form.elements[key].value = operationalSettings[key];
+  });
+  const save = form.querySelector('button[type="submit"]');
+  if (save) save.disabled = currentRole !== 'admin' || !operationalSettingsAvailable;
+  const status = $('#operationalAlertSettingsStatus');
+  if (status) status.textContent = operationalSettingsAvailable
+    ? 'Skärmens live-status blir offline efter utebliven heartbeat. Den här gränsen styr när varningen visas.'
+    : 'Inställningarna kunde inte läsas. Sparning är avstängd tills anslutningen återställs.';
+}
+
+async function saveOperationalAlertSettings(event) {
+  event.preventDefault();
+  if (currentRole !== 'admin') return;
+  const form = event.currentTarget;
+  const values = Object.fromEntries(Object.keys(defaultOperationalSettings).map(key => [key, Number(form.elements[key].value)]));
+  const ranges = {
+    offline_alert_after_minutes: [1, 60],
+    command_alert_after_minutes: [1, 30],
+    feed_error_window_minutes: [5, 240]
+  };
+  for (const [key, [min, max]] of Object.entries(ranges)) {
+    if (!Number.isInteger(values[key]) || values[key] < min || values[key] > max) {
+      return toast(`Välj ett värde mellan ${min} och ${max} minuter.`, true);
+    }
+  }
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    const { data, error } = await supabase.from('team_operational_settings')
+      .update({ ...values, updated_at: new Date().toISOString(), updated_by: currentUser.id })
+      .eq('id', true)
+      .select('offline_alert_after_minutes,command_alert_after_minutes,feed_error_window_minutes')
+      .single();
+    if (error) return toast(error.message, true);
+    operationalSettings = { ...defaultOperationalSettings, ...data };
+    operationalSettingsAvailable = true;
+    renderOperationalAlertSettings();
+    renderOperationalAlerts();
+    toast('Driftvarningarnas gränser sparades för teamet.');
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function collectOperationalAlerts() {
   const now = Date.now();
   const alerts = [];
+  const offlineThresholdMs = Number(operationalSettings.offline_alert_after_minutes || defaultOperationalSettings.offline_alert_after_minutes) * 60000;
+  const commandThresholdMs = Number(operationalSettings.command_alert_after_minutes || defaultOperationalSettings.command_alert_after_minutes) * 60000;
+  const feedErrorWindowMs = Number(operationalSettings.feed_error_window_minutes || defaultOperationalSettings.feed_error_window_minutes) * 60000;
   const latestCommands = new Map();
   screenCommands.forEach(command => {
     if (!latestCommands.has(command.screen_id)) latestCommands.set(command.screen_id, command);
   });
   screens.filter(screen => screen.is_active).forEach(screen => {
-    if (!isOnline(screen)) {
+    const lastContact = screen.last_seen_at || screen.created_at;
+    const offlineForMs = lastContact ? now - new Date(lastContact).getTime() : Number.POSITIVE_INFINITY;
+    if (!isOnline(screen) && offlineForMs >= offlineThresholdMs) {
+      const longOffline = offlineForMs >= offlineThresholdMs * 4;
       alerts.push({
-        kind: 'screen', severity: 0, screen,
+        kind: 'screen', severity: longOffline ? 0 : 1, screen,
         title: screen.last_seen_at ? 'Skärmen är offline' : 'Skärmen har aldrig anslutit',
-        detail: screen.last_seen_at ? `Senaste kontakt ${formatAlertAge(screen.last_seen_at)}` : 'Kontrollera parkoppling och att TV-spelaren är igång.'
+        detail: screen.last_seen_at
+          ? `Senaste kontakt ${formatAlertAge(screen.last_seen_at)} · gräns ${operationalSettings.offline_alert_after_minutes} min`
+          : `Ingen första kontakt · varning efter ${operationalSettings.offline_alert_after_minutes} min från skapandet`
       });
     }
     const command = latestCommands.get(screen.id);
     const commandTime = new Date(command?.completed_at || command?.created_at || 0).getTime();
     if (command && command.status === 'failed' && now - commandTime < 86400000) {
       alerts.push({ kind: 'screen', severity: 1, screen, title: 'Fjärråtgärd misslyckades', detail: `${command.command === 'restart_player' ? 'Omstart' : 'Synk'} · ${command.error_message || 'spelaren rapporterade ett fel'}` });
-    } else if (command && ['pending', 'running'].includes(command.status) && isOnline(screen) && now - new Date(command.created_at).getTime() > 120000) {
-      alerts.push({ kind: 'screen', severity: 1, screen, title: 'Fjärråtgärden väntar', detail: `${command.command === 'restart_player' ? 'Omstart' : 'Synk'} har inte kvitterats på över två minuter.` });
+    } else if (command && ['pending', 'running'].includes(command.status) && isOnline(screen) && now - new Date(command.created_at).getTime() > commandThresholdMs) {
+      alerts.push({ kind: 'screen', severity: 1, screen, title: 'Fjärråtgärden väntar', detail: `${command.command === 'restart_player' ? 'Omstart' : 'Synk'} har inte kvitterats på över ${operationalSettings.command_alert_after_minutes} min.` });
     }
   });
   const recentFeedErrors = integrationStatuses.filter(item => item.status !== 'ok'
-    && item.last_attempt_at && now - new Date(item.last_attempt_at).getTime() < 900000);
+    && item.last_attempt_at && now - new Date(item.last_attempt_at).getTime() < feedErrorWindowMs);
   recentFeedErrors.forEach(feed => {
     const screen = screens.find(item => item.id === feed.screen_id);
     if (!screen?.is_active) return;
@@ -1800,8 +1872,8 @@ function renderOperationalAlerts() {
   if (!container) return;
   const alerts = collectOperationalAlerts();
   const contents = alerts.length
-    ? `<div class="operational-alert-heading"><div><strong>Driftvarningar</strong><span>${alerts.length} kräver uppmärksamhet · uppdateras löpande</span></div><span class="operational-alert-count">${alerts.length}</span></div><div class="operational-alert-list">${alerts.map(alert => `<button class="operational-alert severity-${alert.severity}" type="button" data-alert-kind="${alert.kind}" data-alert-screen="${esc(alert.screen.id)}"><span class="operational-alert-mark">${alert.kind === 'feed' ? '↗' : alert.severity === 0 ? '!' : '↻'}</span><span class="operational-alert-copy"><strong>${esc(alert.screen.name || 'Skärm')} · ${esc(alert.title)}</strong><small>${esc(alert.detail)}</small></span><span class="operational-alert-action">${alert.kind === 'feed' ? 'Visa feed' : 'Öppna skärm'} →</span></button>`).join('')}</div>`
-    : `<div class="operational-alert-heading healthy"><div><strong>Inga aktiva driftvarningar</strong><span>Skärmar, fjärråtgärder och nylig live-data ser bra ut.</span></div><span class="operational-alert-count">✓</span></div>`;
+    ? `<div class="operational-alert-heading"><div><strong>Driftvarningar</strong><span>${alerts.length} kräver uppmärksamhet · offlinevarning efter ${operationalSettings.offline_alert_after_minutes} min</span></div><span class="operational-alert-count">${alerts.length}</span></div><div class="operational-alert-list">${alerts.map(alert => `<button class="operational-alert severity-${alert.severity}" type="button" data-alert-kind="${alert.kind}" data-alert-screen="${esc(alert.screen.id)}"><span class="operational-alert-mark">${alert.kind === 'feed' ? '↗' : alert.severity === 0 ? '!' : '↻'}</span><span class="operational-alert-copy"><strong>${esc(alert.screen.name || 'Skärm')} · ${esc(alert.title)}</strong><small>${esc(alert.detail)}</small></span><span class="operational-alert-action">${alert.kind === 'feed' ? 'Visa feed' : 'Öppna skärm'} →</span></button>`).join('')}</div>`
+    : `<div class="operational-alert-heading healthy"><div><strong>Inga aktiva driftvarningar</strong><span>Skärmar, fjärråtgärder och nylig live-data ser bra ut · offlinevarning efter ${operationalSettings.offline_alert_after_minutes} min.</span></div><span class="operational-alert-count">✓</span></div>`;
   if (container.innerHTML !== contents) container.innerHTML = contents;
 }
 
@@ -1869,6 +1941,7 @@ $('#publishSelectedScreens').addEventListener('click', publishSelectedScreens);
 $('#screenBroadcastForm').addEventListener('submit', sendScreenBroadcast);
 $('#screenBroadcastForm [name="asset_id"]').addEventListener('change', updateBroadcastTextRequirement);
 $('#screenBroadcastList').addEventListener('click', cancelScreenBroadcastFromList);
+$('#operationalAlertSettingsForm').addEventListener('submit', saveOperationalAlertSettings);
 $('#screenBroadcastHistoryDisclosure').addEventListener('toggle', event => {
   if (event.currentTarget.open && !screenBroadcastHistoryLoaded) loadScreenBroadcastHistory();
 });
