@@ -156,6 +156,7 @@ let locations = [];
 let locationMembers = [];
 let playlists = [];
 let playlistSlides = [];
+let playlistVersionHistoryAvailable = true;
 let channels = [];
 let channelPlaylists = [];
 let channelSchedules = [];
@@ -321,6 +322,7 @@ function setSession(user) {
     if (!sameUser) {
       operationalSettings = { ...defaultOperationalSettings };
       operationalSettingsAvailable = true;
+      playlistVersionHistoryAvailable = true;
       screenBroadcasts = [];
       screenBroadcastDelivery = [];
       screenBroadcastDeliveryAvailable = true;
@@ -350,6 +352,7 @@ function setSession(user) {
     locationMembers = [];
     playlists = [];
     playlistSlides = [];
+    playlistVersionHistoryAvailable = true;
     channels = [];
     channelPlaylists = [];
     channelSchedules = [];
@@ -395,15 +398,39 @@ function checkConfig() {
   }
 }
 
+function authRequestMessage(error) {
+  const code = String(error?.code || '').toLowerCase();
+  const message = String(error?.message || '').toLowerCase();
+  if (error?.status === 429 || code.includes('rate_limit') || message.includes('rate limit') || message.includes('too many requests')) {
+    return 'E-postgränsen för Signage Studio är nådd just nu. Använd den senaste giltiga länken du fått. Om den har gått ut, vänta tills timkvoten fyllts på från de senaste Auth-mejlen i projektet och begär sedan en ny länk en gång. Supabases inbyggda e-posttjänst tillåter två Auth-mejl per timme.';
+  }
+  if (['otp_expired', 'token_expired', 'email_not_confirmed'].includes(code) || message.includes('expired')) {
+    return 'Inloggningslänken har gått ut eller redan använts. Begär en ny länk och öppna den i samma webbläsare.';
+  }
+  if (['user_not_found', 'signup_disabled'].includes(code) || message.includes('user not found')) {
+    return 'Kontot finns inte i Signage Studio ännu. Be en administratör kontrollera att du är inbjuden under Team & åtkomst.';
+  }
+  return 'Kunde inte skicka inloggningslänken. Kontrollera e-postadressen och försök igen senare.';
+}
+
 $('#loginForm').addEventListener('submit', async event => {
   event.preventDefault();
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  if (button.disabled) return;
   const email = $('#email').value.trim();
+  button.disabled = true;
   $('#authMessage').textContent = 'Skickar inloggningslänk …';
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    options: { emailRedirectTo: location.href }
-  });
-  $('#authMessage').textContent = error ? error.message : 'Länken är skickad. Öppna den i samma webbläsare.';
+  try {
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: location.href, shouldCreateUser: false }
+    });
+    $('#authMessage').textContent = error ? authRequestMessage(error) : 'Länken är skickad. Öppna den i samma webbläsare.';
+  } catch {
+    $('#authMessage').textContent = 'Kunde inte nå inloggningstjänsten just nu. Kontrollera anslutningen och försök igen senare.';
+  } finally {
+    button.disabled = false;
+  }
 });
 
 $('#signOut').addEventListener('click', async () => {
@@ -707,6 +734,7 @@ $('#mediaFolderFilter').addEventListener('change', renderMediaLibrary);
 $('#activitySearch').addEventListener('input', renderActivityLog);
 $('#activityFilter').addEventListener('change', renderActivityLog);
 $('#refreshActivity').addEventListener('click', loadActivityLog);
+$('#exportActivity').addEventListener('click', exportActivityLog);
 $('#refreshPlayback').addEventListener('click', loadPlaybackEvents);
 $('#playbackFrom').value = localDateInput(new Date(Date.now() - 6 * 86400000));
 $('#playbackTo').value = localDateInput(new Date());
@@ -855,6 +883,7 @@ async function loadScreens() {
   const [
     { data, error },
     { data: playlistData, error: playlistError },
+    { error: playlistVersionError },
     { data: memberData, error: memberError },
     { data: channelData, error: channelError },
     { data: channelPlaylistData, error: channelPlaylistError },
@@ -874,6 +903,7 @@ async function loadScreens() {
   ] = await Promise.all([
     supabase.from('screens').select('*').order('created_at', { ascending: false }),
     supabase.from('playlists').select('*').order('name', { ascending: true }),
+    supabase.from('playlist_versions').select('id').limit(0),
     supabase.from('team_members').select('user_id,email,role').order('email', { ascending: true }),
     supabase.from('channels').select('*').order('name', { ascending: true }),
     supabase.from('channel_playlists').select('*').order('channel_id').order('sort_order'),
@@ -894,6 +924,7 @@ async function loadScreens() {
   if (loadId !== screensLoadId || currentUser?.id !== userId) return;
   if (error) return toast(error.message, true);
   if (playlistError) return toast(playlistError.message, true);
+  if (playlistVersionError && !['42P01', 'PGRST205'].includes(playlistVersionError.code)) return toast(playlistVersionError.message, true);
   if (memberError) return toast(memberError.message, true);
   if (channelError) return toast(channelError.message, true);
   if (channelPlaylistError) return toast(channelPlaylistError.message, true);
@@ -960,6 +991,7 @@ async function loadScreens() {
   locations = locationData || [];
   locationMembers = locationMemberData || [];
   playlists = nextPlaylists;
+  playlistVersionHistoryAvailable = !playlistVersionError;
   playlistSlides = playlistSlideData || [];
   channels = nextChannels;
   channelPlaylists = channelPlaylistData || [];
@@ -999,7 +1031,7 @@ async function loadScreens() {
   }
   const duplicateNames = new Map();
   screens.forEach(screen => {
-    const key = screenProfileKey(screen);
+    const key = screenNameKey(screen);
     duplicateNames.set(key, (duplicateNames.get(key) || 0) + 1);
   });
   screenRenderData = new Map();
@@ -1009,12 +1041,12 @@ async function loadScreens() {
     const screenChannelIds = new Set(channelSchedules.filter(item => item.screen_id === screen.id).map(item => item.channel_id));
     const screenChannelPlaylistIds = new Set(channelPlaylists.filter(item => screenChannelIds.has(item.channel_id)).map(item => item.playlist_id));
     const screenChannelSlides = (channelSlideData || []).filter(item => screenChannelPlaylistIds.has(item.playlist_id));
-    const args = [screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(screenProfileKey(screen)) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides, latestPublications.get(screen.id), publicationHistory.get(screen.id) || [], (approvalData || []).filter(request => request.screen_id === screen.id)];
+    const args = [screen, slides || [], channelSchedules.filter(item => item.screen_id === screen.id), duplicateNames.get(screenNameKey(screen)) || 1, screenCommands.find(command => command.screen_id === screen.id), screenChannelSlides, latestPublications.get(screen.id), publicationHistory.get(screen.id) || [], (approvalData || []).filter(request => request.screen_id === screen.id)];
     screenRenderData.set(screen.id, args);
   });
   renderScreenDirectory();
   if (selectedScreenDetailId && activeWorkspace === 'screen-detail') {
-    if (screenRenderData.has(selectedScreenDetailId)) openScreenDetails(selectedScreenDetailId);
+    if (screenRenderData.has(selectedScreenDetailId) && !screens.find(screen => screen.id === selectedScreenDetailId)?.archived_at) openScreenDetails(selectedScreenDetailId);
     else { selectedScreenDetailId = null; setWorkspace('screens'); }
   }
   selectedScreenIds.forEach(id => { if (!screens.some(screen => screen.id === id)) selectedScreenIds.delete(id); });
@@ -1222,6 +1254,48 @@ function findScheduleConflicts(entries, dayStart, weekday) {
   return conflicts;
 }
 
+function channelScheduleDefinitionKey(schedule) {
+  return JSON.stringify([
+    schedule.channel_id,
+    Number(schedule.priority),
+    schedule.active_from || null,
+    schedule.active_until || null,
+    [...(schedule.weekdays || [])].map(Number).sort((a, b) => a - b),
+    schedule.daily_start_time || null,
+    schedule.daily_end_time || null
+  ]);
+}
+
+function duplicateLogicalChannelSchedules(schedule) {
+  const screen = screens.find(item => item.id === schedule.screen_id);
+  const profileKey = screen ? screenProfileKey(screen) : schedule.screen_id;
+  const definitionKey = channelScheduleDefinitionKey(schedule);
+  return channelSchedules.filter(item => {
+    const itemScreen = screens.find(candidate => candidate.id === item.screen_id);
+    return (itemScreen ? screenProfileKey(itemScreen) : item.screen_id) === profileKey
+      && channelScheduleDefinitionKey(item) === definitionKey;
+  });
+}
+
+function suggestChannelPriority(schedule) {
+  const screen = screens.find(item => item.id === schedule.screen_id);
+  const profileKey = screen ? screenProfileKey(screen) : schedule.screen_id;
+  const duplicateIds = new Set(duplicateLogicalChannelSchedules(schedule).map(item => item.id));
+  const used = new Set(channelSchedules.filter(item => {
+    const itemScreen = screens.find(candidate => candidate.id === item.screen_id);
+    return (itemScreen ? screenProfileKey(itemScreen) : item.screen_id) === profileKey
+      && !duplicateIds.has(item.id);
+  }).map(item => Number(item.priority)));
+  const current = Number(schedule.priority);
+  for (let priority = current + 1; priority <= 1000; priority++) {
+    if (!used.has(priority)) return priority;
+  }
+  for (let priority = current - 1; priority >= 0; priority--) {
+    if (!used.has(priority)) return priority;
+  }
+  return null;
+}
+
 function renderChannelCalendar() {
   const grid = $('#channelCalendarGrid');
   const range = $('#channelCalendarRange');
@@ -1255,6 +1329,7 @@ function renderChannelCalendar() {
     if (!visibleSchedulesByKey.has(key)) visibleSchedulesByKey.set(key, schedule);
   });
   const visibleSchedules = [...visibleSchedulesByKey.values()];
+  const suggestedConflictPairs = new Set();
   grid.innerHTML = days.map(day => {
     const weekday = ((day.getDay() + 6) % 7) + 1;
     const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate());
@@ -1283,13 +1358,60 @@ function renderChannelCalendar() {
         const priority = Number(schedule.priority);
         const otherPriority = Number(other.priority);
         const outcome = priority < otherPriority ? `prio ${priority} vinner` : priority > otherPriority ? `prio ${otherPriority} vinner` : `samma kanalprio ${priority}; TV:n använder spellistprio och ordning som utslagsregel`;
-        return `Överlappar ${otherChannel?.name || 'annan kanal'} · ${outcome}`;
-      }).join(' · ');
-      return `<article class="channel-calendar-event ${overlaps.length ? 'conflict' : ''}" ${overlaps.length ? 'aria-label="Schemakrock"' : ''}><strong>${esc(channel.name)}</strong><span>${esc(screen.name)}</span><small>${esc(time)}${continuesFromPreviousDay ? ' · fortsättning från föregående dag' : ''} · prio ${Number(schedule.priority)}</small>${schedule.active_from || schedule.active_until ? `<small>${schedule.active_from ? calendarDateLabel(new Date(schedule.active_from)) : 'Start utan gräns'} – ${schedule.active_until ? calendarDateLabel(new Date(schedule.active_until)) : 'utan slut'}</small>` : ''}${conflictNote ? `<small class="channel-conflict-note">⚠ ${esc(conflictNote)}</small>` : ''}</article>`;
+        const pairKey = [schedule.id, other.id].sort().join(':');
+        let suggestion = '';
+        if (priority === otherPriority && ['admin', 'editor'].includes(currentRole) && !suggestedConflictPairs.has(pairKey)) {
+          suggestedConflictPairs.add(pairKey);
+          const suggestedPriority = suggestChannelPriority(schedule);
+          if (suggestedPriority !== null) {
+            suggestion = ` <button class="button ghost small channel-priority-suggestion" type="button" data-schedule-id="${esc(schedule.id)}" data-suggested-priority="${suggestedPriority}">Sätt prio ${suggestedPriority}</button>`;
+          }
+        }
+        return `<small class="channel-conflict-detail">⚠ Överlappar ${esc(otherChannel?.name || 'annan kanal')} · ${esc(outcome)}${suggestion}</small>`;
+      }).join('');
+      return `<article class="channel-calendar-event ${overlaps.length ? 'conflict' : ''}" ${overlaps.length ? 'aria-label="Schemakrock"' : ''}><strong>${esc(channel.name)}</strong><span>${esc(screen.name)}</span><small>${esc(time)}${continuesFromPreviousDay ? ' · fortsättning från föregående dag' : ''} · prio ${Number(schedule.priority)}</small>${schedule.active_from || schedule.active_until ? `<small>${schedule.active_from ? calendarDateLabel(new Date(schedule.active_from)) : 'Start utan gräns'} – ${schedule.active_until ? calendarDateLabel(new Date(schedule.active_until)) : 'utan slut'}</small>` : ''}${conflictNote ? `<div class="channel-conflict-note">${conflictNote}</div>` : ''}</article>`;
     }).join('');
     return `<section class="channel-calendar-day ${day.toDateString() === new Date().toDateString() ? 'today' : ''}"><header><strong>${calendarDateLabel(day, { weekday: 'short' })}</strong><span>${calendarDateLabel(day, { day: 'numeric', month: 'short' })}</span></header><div class="channel-calendar-events">${items || '<span class="channel-calendar-empty">Inget kanalschema</span>'}</div></section>`;
   }).join('');
 }
+
+$('#channelCalendarGrid').addEventListener('click', async event => {
+  const button = event.target.closest('[data-suggested-priority]');
+  if (!button || button.disabled || !['admin', 'editor'].includes(currentRole)) return;
+  const schedule = channelSchedules.find(item => item.id === button.dataset.scheduleId);
+  const priority = Number(button.dataset.suggestedPriority);
+  if (!schedule || !Number.isInteger(priority) || priority < 0 || priority > 1000) return;
+  const duplicates = duplicateLogicalChannelSchedules(schedule);
+  const duplicateIds = new Set(duplicates.map(item => item.id));
+  const screen = screens.find(item => item.id === schedule.screen_id);
+  const profileKey = screen ? screenProfileKey(screen) : schedule.screen_id;
+  const priorityTaken = channelSchedules.some(item => {
+    if (duplicateIds.has(item.id) || Number(item.priority) !== priority) return false;
+    const itemScreen = screens.find(candidate => candidate.id === item.screen_id);
+    return (itemScreen ? screenProfileKey(itemScreen) : item.screen_id) === profileKey;
+  });
+  if (priorityTaken) {
+    toast('Schemat ändrades sedan kalendern laddades. Uppdatera och välj en ny prioritetssuggestion.', true);
+    return loadScreens();
+  }
+  button.disabled = true;
+  const expectedIds = duplicates.map(item => item.id);
+  const { data: updatedSchedules, error } = await supabase.from('screen_channel_schedules')
+    .update({ priority })
+    .in('id', expectedIds)
+    .select('id');
+  if (error) {
+    button.disabled = false;
+    return toast(error.message, true);
+  }
+  if ((updatedSchedules || []).length !== expectedIds.length) {
+    button.disabled = false;
+    toast('Alla matchande skärmprofiler kunde inte uppdateras. Ladda om kalendern och kontrollera behörighet.', true);
+    return loadScreens();
+  }
+  toast(`Prioritet ${priority} sparades som utkast${duplicates.length > 1 ? ` för ${duplicates.length} äldre skärmprofiler` : ''}. Publicera skärmen för att skicka schemat till TV:n.`);
+  await loadScreens();
+});
 
 function renderPlaylistLibrary() {
   const container = $('#playlistManagementList');
@@ -1303,6 +1425,33 @@ function renderPlaylistLibrary() {
     card.className = 'playlist-manage-card';
     card.dataset.playlistId = playlist.id;
     card.innerHTML = `<div class="playlist-manage-heading"><div><span class="section-kicker">SPELLISTA · ${items.length} OBJEKT</span><form class="playlist-name-form" data-playlist-name="${esc(playlist.id)}"><input name="name" maxlength="80" value="${esc(playlist.name)}" aria-label="Spellistans namn" ${canEdit ? '' : 'disabled'} /><button class="button ghost small" type="submit" ${canEdit ? '' : 'disabled'}>Spara namn</button></form><span>${screenCount} skärmar · ${channelCount} kanaler använder listan</span></div><button class="button ghost small playlist-delete" type="button" data-playlist-delete="${esc(playlist.id)}" ${!canEdit || screenCount > 0 || channelCount > 0 ? 'disabled' : ''} title="${screenCount || channelCount ? 'Ta först bort listan från skärmar och kanaler.' : 'Ta bort tomma eller oanvända spellistor.'}">Ta bort</button></div><div class="playlist-manage-items">${items.map((item, index) => `<div class="playlist-manage-item" draggable="${canEdit ? 'true' : 'false'}" data-playlist-slide="${esc(item.id)}" aria-label="Flytta ${esc(item.title || kindLabel(item.kind))} i spellistan"><div class="slide-thumb">${item.kind === 'image' ? '▧' : item.kind === 'video' ? '▶' : item.kind === 'feed' || item.kind === 'web' ? '↗' : item.kind === 'clock' ? '◷' : 'T'}</div><div class="playlist-manage-copy"><strong>${esc(item.title || kindLabel(item.kind))}</strong><span>${esc(kindLabel(item.kind))} · ${item.duration_seconds}s</span></div><div class="playlist-manage-actions"><button class="icon-button" type="button" data-playlist-item-action="up" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === 0 ? 'disabled' : ''} aria-label="Flytta upp">↑</button><button class="icon-button" type="button" data-playlist-item-action="down" data-playlist-item-id="${esc(item.id)}" ${!canEdit || index === items.length - 1 ? 'disabled' : ''} aria-label="Flytta ned">↓</button><button class="icon-button delete" type="button" data-playlist-item-action="delete" data-playlist-item-id="${esc(item.id)}" ${!canEdit ? 'disabled' : ''} aria-label="Ta bort från spellistan">×</button></div></div>`).join('') || '<div class="playlist-manage-empty">Spellistan är tom. Lägg till publicerat material från biblioteket nedan.</div>'}</div>`;
+    if (playlistVersionHistoryAvailable) {
+      const historyDetails = document.createElement('details');
+      historyDetails.className = 'playlist-version-history';
+      historyDetails.dataset.playlistHistory = playlist.id;
+      const summary = document.createElement('summary');
+      summary.textContent = 'Versionshistorik';
+      const entries = document.createElement('div');
+      entries.className = 'playlist-version-history-list';
+      const hint = document.createElement('p');
+      hint.textContent = 'Öppna för att läsa versionshistoriken.';
+      entries.append(hint);
+      historyDetails.append(summary, entries);
+      historyDetails.addEventListener('toggle', () => {
+        if (historyDetails.open && historyDetails.dataset.loaded !== 'true') loadPlaylistVersionPage(historyDetails, 0);
+      });
+      historyDetails.addEventListener('click', event => {
+        const more = event.target.closest('[data-playlist-version-more]');
+        if (!more || more.disabled) return;
+        loadPlaylistVersionPage(historyDetails, Number(historyDetails.dataset.nextOffset || 0));
+      });
+      card.append(historyDetails);
+    } else {
+      const historyNotice = document.createElement('p');
+      historyNotice.className = 'playlist-version-history-notice';
+      historyNotice.textContent = 'Versionshistorik aktiveras när databasmigrationen 20261203100000_playlist_version_history.sql har körts.';
+      card.append(historyNotice);
+    }
     const heading = card.querySelector('.playlist-manage-heading');
     const actions = document.createElement('div');
     actions.className = 'playlist-manage-ops';
@@ -1319,6 +1468,95 @@ function renderPlaylistLibrary() {
     return card;
   }));
   if (!playlists.length) container.innerHTML = '<div class="playlist-manage-empty">Skapa en spellista för att samla innehåll och återanvända den på flera skärmar eller i kanaler.</div>';
+}
+
+async function loadPlaylistVersionPage(details, offset) {
+  if (!details?.isConnected || details.dataset.loading === 'true' || !currentUser) return;
+  const userId = currentUser.id;
+  const playlistId = details.dataset.playlistHistory;
+  const list = details.querySelector('.playlist-version-history-list');
+  const summary = details.querySelector('summary');
+  if (!playlistId || !list || !summary) return;
+  details.dataset.loading = 'true';
+  const moreButton = details.querySelector('[data-playlist-version-more]');
+  if (moreButton) {
+    moreButton.disabled = true;
+    moreButton.textContent = 'Laddar …';
+  }
+  if (offset === 0) {
+    list.replaceChildren();
+    const loading = document.createElement('p');
+    loading.textContent = 'Hämtar historik …';
+    list.append(loading);
+  }
+  try {
+    const pageSize = 12;
+    const { data, error, count } = await supabase.from('playlist_versions')
+      .select('id,version,playlist_name,created_at', { count: 'exact' })
+      .eq('playlist_id', playlistId)
+      .order('version', { ascending: false })
+      .range(offset, offset + pageSize - 1);
+    if (currentUser?.id !== userId || !details.isConnected) return;
+    if (error) {
+      details.dataset.loaded = 'false';
+      if (offset === 0) {
+        list.replaceChildren();
+        const message = document.createElement('p');
+        message.textContent = `Versionshistoriken kunde inte läsas: ${error.message}`;
+        list.append(message);
+      } else {
+        toast(`Fler versioner kunde inte läsas: ${error.message}`, true);
+      }
+      return;
+    }
+    const versions = data || [];
+    if (offset === 0) list.replaceChildren();
+    if (!versions.length && offset === 0) {
+      const empty = document.createElement('p');
+      empty.textContent = 'Ändringar i spellistan sparas här automatiskt.';
+      list.append(empty);
+    }
+    versions.forEach(version => {
+      const row = document.createElement('div');
+      row.className = 'playlist-version-history-row';
+      const label = document.createElement('span');
+      label.textContent = `Version ${version.version} · ${new Date(version.created_at).toLocaleString('sv-SE')} · ${version.playlist_name}`;
+      row.append(label);
+      if (['admin', 'editor'].includes(currentRole)) {
+        const restore = document.createElement('button');
+        restore.type = 'button';
+        restore.className = 'button ghost small';
+        restore.dataset.playlistVersionRestore = version.id;
+        restore.dataset.playlistName = version.playlist_name;
+        restore.dataset.playlistVersion = version.version;
+        restore.textContent = 'Skapa kopia från version';
+        row.append(restore);
+      }
+      list.append(row);
+    });
+    const nextOffset = offset + versions.length;
+    const totalCount = Number(count ?? nextOffset);
+    details.dataset.nextOffset = String(nextOffset);
+    details.dataset.count = String(totalCount);
+    details.dataset.loaded = 'true';
+    summary.textContent = `Versionshistorik · ${totalCount}`;
+    details.querySelector('[data-playlist-version-more]')?.remove();
+    if (nextOffset < totalCount) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'button ghost small playlist-version-more';
+      more.dataset.playlistVersionMore = 'true';
+      more.textContent = `Visa fler versioner (${totalCount - nextOffset} kvar)`;
+      list.append(more);
+    }
+  } finally {
+    delete details.dataset.loading;
+    const pendingMore = details.querySelector('[data-playlist-version-more]');
+    if (pendingMore) {
+      pendingMore.disabled = false;
+      pendingMore.textContent = `Visa fler versioner (${Math.max(0, Number(details.dataset.count || 0) - Number(details.dataset.nextOffset || 0))} kvar)`;
+    }
+  }
 }
 
 async function savePlaylistOrder(playlistId, orderedIds) {
@@ -1401,6 +1639,29 @@ $('#playlistManagementList').addEventListener('submit', async event => {
 });
 
 $('#playlistManagementList').addEventListener('click', async event => {
+  const versionRestore = event.target.closest('[data-playlist-version-restore]');
+  if (versionRestore && !versionRestore.disabled) {
+    if (!['admin','editor'].includes(currentRole)) return;
+    const playlistName = versionRestore.dataset.playlistName || 'Spellista';
+    const versionNumber = versionRestore.dataset.playlistVersion;
+    const suggestedName = `${playlistName.slice(0, 61)} – version ${versionNumber}`;
+    const name = prompt(`Namn på den nya spellistan från version ${versionNumber}:`, suggestedName)?.trim();
+    if (!name) return;
+    if (name.length > 80) return toast('Spellistans namn får vara högst 80 tecken.', true);
+    versionRestore.disabled = true;
+    try {
+      const { error } = await supabase.rpc('create_playlist_from_version', {
+        input_version_id: versionRestore.dataset.playlistVersionRestore,
+        input_name: name
+      });
+      if (error) return toast(error.message, true);
+      toast(`En fristående spellista skapades från version ${versionNumber}. Befintliga skärmar och publicerat innehåll ändrades inte.`);
+      await loadScreens();
+    } finally {
+      versionRestore.disabled = false;
+    }
+    return;
+  }
   const duplicatePlaylist = event.target.closest('[data-playlist-duplicate]');
   if (duplicatePlaylist && !duplicatePlaylist.disabled) {
     const source = playlists.find(item => item.id === duplicatePlaylist.dataset.playlistDuplicate);
@@ -1629,7 +1890,50 @@ function renderTeamMembers() {
   if (!list) return;
   if (currentRole !== 'admin') { list.replaceChildren(); return; }
   const labels = { admin: 'Admin', editor: 'Redaktör · alla skärmar', viewer: 'Läsbehörig · alla skärmar', group_member: 'Gruppmedlem · begränsad gruppåtkomst' };
-  list.innerHTML = teamMembers.map(member => `<div class="team-member" data-user-id="${esc(member.user_id)}"><div class="team-member-identity"><strong>${esc(member.email)}</strong><span>${labels[member.role] || esc(member.role)}</span></div><select class="member-role" aria-label="Roll för ${esc(member.email)}"><option value="editor" ${member.role === 'editor' ? 'selected' : ''}>Redaktör · alla skärmar</option><option value="viewer" ${member.role === 'viewer' ? 'selected' : ''}>Läsbehörig · alla skärmar</option><option value="group_member" ${member.role === 'group_member' ? 'selected' : ''}>Gruppmedlem · valda grupper</option><option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option></select><button class="button ghost small save-member">Spara</button><button class="button ghost small remove-member">Ta bort</button></div>`).join('') || '<p class="team-empty">Inga teammedlemmar ännu.</p>';
+  list.innerHTML = teamMembers.map(member => `<div class="team-member" data-user-id="${esc(member.user_id)}"><div class="team-member-identity"><strong>${esc(member.email)}</strong><span>${labels[member.role] || esc(member.role)}</span></div><select class="member-role" aria-label="Roll för ${esc(member.email)}"><option value="editor" ${member.role === 'editor' ? 'selected' : ''}>Redaktör · alla skärmar</option><option value="viewer" ${member.role === 'viewer' ? 'selected' : ''}>Läsbehörig · alla skärmar</option><option value="group_member" ${member.role === 'group_member' ? 'selected' : ''}>Gruppmedlem · valda grupper</option><option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option></select><button class="button ghost small save-member">Spara</button><button class="button ghost small send-team-link" type="button">Skicka inloggningslänk</button><button class="button ghost small remove-member">Ta bort</button></div>`).join('') || '<p class="team-empty">Inga teammedlemmar ännu.</p>';
+  list.querySelectorAll('.send-team-link').forEach(button => button.addEventListener('click', async () => {
+    if (button.disabled) return;
+    const row = button.closest('.team-member');
+    const member = teamMembers.find(item => item.user_id === row?.dataset.userId);
+    if (!member?.email) return toast('Medlemmen saknar e-postadress.', true);
+    button.disabled = true;
+    button.textContent = 'Skickar …';
+    let cooldownMs = 60_000;
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email: member.email,
+        options: { emailRedirectTo: location.href, shouldCreateUser: false }
+      });
+      if (error) {
+        const code = String(error.code || '').toLowerCase();
+        const message = String(error.message || '').toLowerCase();
+        if (error.status === 429 || code.includes('rate_limit') || message.includes('rate limit') || message.includes('too many requests')) {
+          cooldownMs = 60 * 60_000;
+        }
+        return toast(authRequestMessage(error), true);
+      }
+      toast(`Inloggningslänk skickad till ${member.email}.`);
+    } catch {
+      toast('Kunde inte nå inloggningstjänsten just nu. Försök igen senare.', true);
+    } finally {
+      const retryAt = Date.now() + cooldownMs;
+      const updateCooldown = () => {
+        if (!button.isConnected) return;
+        const secondsLeft = Math.ceil((retryAt - Date.now()) / 1000);
+        if (secondsLeft <= 0) {
+          button.disabled = false;
+          button.textContent = 'Skicka inloggningslänk';
+          button.title = '';
+          return;
+        }
+        button.disabled = true;
+        button.textContent = secondsLeft > 90 ? `Vänta ${Math.ceil(secondsLeft / 60)} min` : `Vänta ${secondsLeft} s`;
+        button.title = 'Supabase tillåter inte upprepade mejl till samma mottagare direkt efter varandra.';
+        setTimeout(updateCooldown, secondsLeft > 90 ? 60_000 : 1000);
+      };
+      updateCooldown();
+    }
+  }));
   list.querySelectorAll('.save-member').forEach(button => button.addEventListener('click', async () => {
     const row = button.closest('.team-member');
     const member = teamMembers.find(item => item.user_id === row.dataset.userId);
@@ -1678,13 +1982,17 @@ function activityMatchesGroup(item, group) {
   return item.entity_type === group;
 }
 
+function filteredActivityRows(items, group, query) {
+  return items.filter(item => activityMatchesGroup(item, group)
+    && (!query || `${item.actor_email} ${item.entity_label} ${item.entity_type} ${(item.changed_fields || []).join(' ')}`.toLocaleLowerCase('sv-SE').includes(query)));
+}
+
 function renderActivityLog() {
   const list = $('#activityList');
   if (!list) return;
   const query = ($('#activitySearch')?.value || '').trim().toLocaleLowerCase('sv-SE');
   const group = $('#activityFilter')?.value || 'all';
-  const rows = activityLog.filter(item => activityMatchesGroup(item, group)
-    && (!query || `${item.actor_email} ${item.entity_label} ${item.entity_type} ${(item.changed_fields || []).join(' ')}`.toLocaleLowerCase('sv-SE').includes(query)));
+  const rows = filteredActivityRows(activityLog, group, query);
   if (!activityLog.length) {
     list.innerHTML = '<div class="activity-empty">Inga registrerade händelser ännu. Nya ändringar visas här automatiskt.</div>';
     return;
@@ -1701,6 +2009,75 @@ function renderActivityLog() {
     const detail = fields.length ? fields.join(', ') : item.action === 'INSERT' ? 'Ny post' : item.action === 'DELETE' ? 'Post borttagen' : '—';
     return `<div class="activity-row" role="row"><time datetime="${esc(item.created_at)}">${esc(date(item.created_at))}</time><span>${esc(item.actor_email || 'System/automatiserat')}</span><span><strong>${esc(entity)} ${esc(action)}</strong><small>${esc(item.entity_label)}</small></span><span>${esc(detail)}</span></div>`;
   }).join('')}</div>`;
+}
+
+async function exportActivityLog() {
+  if (currentRole !== 'admin') return;
+  const userId = currentUser?.id;
+  if (!userId) return;
+  const button = $('#exportActivity');
+  const originalLabel = button.textContent;
+  const group = $('#activityFilter')?.value || 'all';
+  const query = ($('#activitySearch')?.value || '').trim().toLocaleLowerCase('sv-SE');
+  const rows = [];
+  const seenIds = new Set();
+  let cursor = null;
+  button.disabled = true;
+  button.textContent = 'Hämtar logg …';
+  try {
+    while (true) {
+      let request = supabase.from('activity_log')
+        .select('id,actor_email,action,entity_type,entity_label,changed_fields,created_at')
+        .order('created_at', { ascending: false }).order('id', { ascending: false }).limit(500);
+      if (cursor) {
+        request = request.or(`created_at.lt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.lt.${cursor.id})`);
+      }
+      const { data, error } = await request;
+      if (currentRole !== 'admin' || currentUser?.id !== userId) return;
+      if (error) return toast(`Aktivitetsloggen kunde inte exporteras: ${error.message}`, true);
+      const page = data || [];
+      const fresh = page.filter(item => !seenIds.has(item.id));
+      fresh.forEach(item => {
+        seenIds.add(item.id);
+        rows.push(item);
+      });
+      if (page.length < 500 || fresh.length === 0) break;
+      cursor = page[page.length - 1];
+    }
+
+    const matchingRows = filteredActivityRows(rows, group, query);
+    if (currentRole !== 'admin' || currentUser?.id !== userId) return;
+    if (!matchingRows.length) return toast('Inga aktivitetsrader matchar filtret.');
+    const csvCell = value => {
+      let text = String(value ?? '');
+      if (/^[\s]*[=+@-]/.test(text)) text = `'${text}`;
+      return `"${text.replaceAll('"', '""')}"`;
+    };
+    const csvRows = [
+      ['Tid (UTC)', 'Person', 'Entitet', 'Post', 'Åtgärd', 'Ändrade fält'],
+      ...matchingRows.map(item => [
+        item.created_at,
+        item.actor_email || 'System/automatiserat',
+        activityEntityLabels[item.entity_type] || item.entity_type,
+        item.entity_label,
+        activityActionLabels[item.action] || item.action,
+        (item.changed_fields || []).map(field => activityFieldLabels[field] || field.replaceAll('_', ' ')).join(', ')
+      ])
+    ].map(row => row.map(csvCell).join(',')).join('\r\n');
+    const blob = new Blob([`\ufeff${csvRows}\r\n`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `signage-studio-activity-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast(`${matchingRows.length} matchande händelser exporterades. Skärmens innehållsvärden ingår inte i loggen.`);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
 }
 
 async function loadActivityLog() {
@@ -1937,11 +2314,17 @@ function isOnline(screen) {
 }
 
 function screenProfileKey(screen) {
+  const identity = String(screen?.device_identity || '').trim();
+  return identity ? `device:${identity}` : `profile:${screen?.id || 'unknown'}`;
+}
+
+function screenNameKey(screen) {
   return String(screen?.name || '').trim().toLocaleLowerCase('sv-SE') || `screen-${screen?.id || 'unknown'}`;
 }
 
 function compareScreenProfiles(left, right) {
-  return Number(isOnline(right)) - Number(isOnline(left))
+  return Number(Boolean(right.is_active)) - Number(Boolean(left.is_active))
+    || Number(isOnline(right)) - Number(isOnline(left))
     || Number(Boolean(right.device_identity)) - Number(Boolean(left.device_identity))
     || Number(Boolean(left.pair_code)) - Number(Boolean(right.pair_code))
     || Number(Boolean(right.activated_at)) - Number(Boolean(left.activated_at))
@@ -1950,7 +2333,7 @@ function compareScreenProfiles(left, right) {
 
 function screenProfileGroups(source = screens) {
   const groups = new Map();
-  source.forEach(screen => {
+  source.filter(screen => !screen.archived_at).forEach(screen => {
     const key = screenProfileKey(screen);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(screen);
@@ -1959,13 +2342,13 @@ function screenProfileGroups(source = screens) {
 }
 
 function logicalScreens(source = screens) {
-  return screenProfileGroups(source).map(group => [...group].sort(compareScreenProfiles)[0]);
+  return screenProfileGroups(source.filter(screen => !screen.archived_at)).map(group => [...group].sort(compareScreenProfiles)[0]);
 }
 
 function screenProfileIds(screenId) {
   const selected = screens.find(screen => screen.id === screenId);
   if (!selected) return [];
-  return screens.filter(screen => screenProfileKey(screen) === screenProfileKey(selected)).map(screen => screen.id);
+  return screens.filter(screen => !screen.archived_at && screenProfileKey(screen) === screenProfileKey(selected)).map(screen => screen.id);
 }
 
 function selectedLogicalScreens() {
@@ -2121,28 +2504,61 @@ $('#operationalAlerts').addEventListener('click', event => {
 function updateScreenSummary() {
   const devices = logicalScreens();
   const online = devices.filter(isOnline).length;
-  const hiddenProfiles = screens.length - devices.length;
-  $('#screenCount').textContent = `${devices.length} ${devices.length === 1 ? 'TV' : 'TV-apparater'} · ${online} online${hiddenProfiles ? ` · ${hiddenProfiles} äldre profiler dolda` : ''}`;
+  const visibleProfiles = screens.filter(screen => !screen.archived_at).length;
+  const hiddenProfiles = visibleProfiles - devices.length;
+  const archivedCount = screens.filter(screen => screen.archived_at).length;
+  $('#screenCount').textContent = `${devices.length} ${devices.length === 1 ? 'TV' : 'TV-apparater'} · ${online} online${hiddenProfiles ? ` · ${hiddenProfiles} äldre profiler dolda` : ''}${archivedCount ? ` · ${archivedCount} arkiverade` : ''}`;
   renderOperationalAlerts();
   renderScreenDirectory();
+  renderArchivedScreens();
 }
+
+function renderArchivedScreens() {
+  const container = $('#archivedScreenList');
+  if (!container) return;
+  const archived = screens.filter(screen => screen.archived_at).sort((a, b) => new Date(b.archived_at) - new Date(a.archived_at));
+  container.innerHTML = archived.length
+    ? archived.map(screen => `<div class="archived-screen-row"><span><strong>${esc(screen.name)}</strong><small>Arkiverad ${esc(new Date(screen.archived_at).toLocaleString('sv-SE'))} · innehåll och historik bevaras</small></span><button class="button ghost small" type="button" data-restore-screen="${esc(screen.id)}" ${currentRole === 'admin' ? '' : 'disabled'}>Återställ</button></div>`).join('')
+    : '<div class="screen-groups-empty">Inga arkiverade skärmar.</div>';
+}
+
+$('#archivedScreenList')?.addEventListener('click', async event => {
+  const button = event.target.closest('[data-restore-screen]');
+  if (!button || currentRole !== 'admin') return;
+  const screen = screens.find(item => item.id === button.dataset.restoreScreen && item.archived_at);
+  if (!screen) return;
+  button.disabled = true;
+  const { error } = await supabase.from('screens').update({ archived_at: null }).eq('id', screen.id);
+  if (error) { button.disabled = false; return toast(error.message, true); }
+  toast(`”${screen.name}” återställdes. Skärmen förblir pausad tills du aktiverar den.`);
+  await loadScreens();
+});
 
 function renderScreenDirectory() {
   if (!screenDirectoryList) return;
   const devices = logicalScreens();
   const cardsMarkup = devices.map(screen => {
     const online = isOnline(screen);
+    const publication = screenRenderData.get(screen.id)?.[6] || null;
+    const publishedRevision = Number(publication?.revision || 0);
+    const appliedRevision = screen.applied_revision == null ? null : Number(screen.applied_revision);
+    const deliveryState = !publication ? 'unpublished'
+      : appliedRevision == null || appliedRevision < publishedRevision ? 'pending' : 'synced';
+    const deliveryLabel = !publication ? 'Ej publicerad'
+      : deliveryState === 'pending' ? (appliedRevision == null ? `Väntar på kvittens för v${publishedRevision}` : `Väntar på v${publishedRevision} · TV v${appliedRevision}`)
+      : `Synkad v${appliedRevision}`;
     const group = screenGroups.find(item => item.id === screen.group_id)?.name;
     const location = locations.find(item => item.id === screen.location_id)?.name;
     const current = online ? (screen.current_title || 'Väntar på innehåll') : 'Ingen livekontakt';
     const currentKind = online ? kindLabel(screen.current_kind) : 'Offline';
     const selected = screenProfileIds(screen.id).some(id => selectedScreenIds.has(id));
     const duplicateCount = screenProfileGroups().find(entries => entries.some(item => item.id === screen.id))?.length || 1;
-    return `<article class="screen-directory-card" data-screen-id="${esc(screen.id)}" data-screen-name="${esc(screen.name || '')}" data-screen-current="${esc(screen.current_title || '')}" data-screen-status="${online ? 'online' : screen.pair_code ? 'pairing' : 'offline'}" data-screen-group="${esc(screen.group_id || '')}" data-screen-location="${esc(screen.location_id || '')}">
+    const sameNameCount = screens.filter(item => !item.archived_at && screenNameKey(item) === screenNameKey(screen)).length;
+    return `<article class="screen-directory-card" data-screen-id="${esc(screen.id)}" data-screen-name="${esc(screen.name || '')}" data-screen-current="${esc(screen.current_title || '')}" data-screen-status="${online ? 'online' : screen.pair_code ? 'pairing' : 'offline'}" data-screen-publish="${deliveryState}" data-screen-group="${esc(screen.group_id || '')}" data-screen-location="${esc(screen.location_id || '')}">
       <label class="screen-directory-select"><input class="screen-directory-checkbox" type="checkbox" ${selected ? 'checked' : ''} ${['admin', 'editor'].includes(currentRole) ? '' : 'disabled'} aria-label="Välj ${esc(screen.name)}" /></label>
       <button class="screen-directory-open" type="button" data-open-screen="${esc(screen.id)}" aria-label="Öppna inställningar för ${esc(screen.name)}">
-        <span class="screen-directory-icon">▣</span><span class="screen-directory-main"><strong>${esc(screen.name || 'Namnlös skärm')}</strong><small>${esc([location, group].filter(Boolean).join(' · ') || 'Ingen plats eller grupp')}${duplicateCount > 1 ? ` · ${duplicateCount - 1} äldre profil${duplicateCount > 2 ? 'er' : ''} dolda` : ''}</small></span>
-        <span class="screen-directory-now"><small>VISAS JUST NU</small><strong>${esc(current)}</strong><small>${esc(currentKind)}</small></span>
+        <span class="screen-directory-icon">▣</span><span class="screen-directory-main"><strong>${esc(screen.name || 'Namnlös skärm')}</strong><small>${esc([location, group].filter(Boolean).join(' · ') || 'Ingen plats eller grupp')}${duplicateCount > 1 ? ` · ${duplicateCount - 1} profil${duplicateCount > 2 ? 'er' : ''} med samma TV-ID dolda` : ''}${sameNameCount > 1 ? ` · ${sameNameCount} profiler med samma namn` : ''}</small></span>
+        <span class="screen-directory-now"><small>VISAS JUST NU</small><strong>${esc(current)}</strong><small>${esc(currentKind)}</small><small class="screen-directory-delivery ${deliveryState}">PUBLICERING · ${esc(deliveryLabel)}</small></span>
         <span class="screen-directory-status ${online ? 'online' : 'offline'}"><i></i>${online ? 'Online' : screen.pair_code ? 'Parkoppling' : 'Offline'}</span><span class="screen-directory-arrow">→</span>
       </button>
     </article>`;
@@ -2171,6 +2587,7 @@ screenDirectoryList.addEventListener('click', event => {
 
 $('#screenSearch').addEventListener('input', applyScreenFilters);
 $('#screenFilter').addEventListener('change', applyScreenFilters);
+$('#publicationFilter').addEventListener('change', applyScreenFilters);
 $('#locationFilter').addEventListener('change', applyScreenFilters);
 $('#groupFilter').addEventListener('change', applyScreenFilters);
 $('#selectVisibleScreens').addEventListener('click', () => {
@@ -2206,6 +2623,7 @@ $('#assignSelectedLocation').addEventListener('click', assignSelectedScreensToLo
 function applyScreenFilters() {
   const query = $('#screenSearch').value.trim().toLocaleLowerCase('sv-SE');
   const filter = $('#screenFilter').value;
+  const publicationFilter = $('#publicationFilter').value;
   const selectedLocation = $('#locationFilter').value;
   const selectedGroup = $('#groupFilter').value;
   const visible = [];
@@ -2216,13 +2634,15 @@ function applyScreenFilters() {
       || (filter === 'online' && screen && isOnline(screen))
       || (filter === 'offline' && screen && !isOnline(screen))
       || (filter === 'pairing' && Boolean(screen?.pair_code));
+    const matchesPublication = publicationFilter === 'all'
+      || card.dataset.screenPublish === publicationFilter;
     const matchesGroup = selectedGroup === 'all'
       || (selectedGroup === 'ungrouped' && !screen?.group_id)
       || (screen?.group_id === selectedGroup);
     const matchesLocation = selectedLocation === 'all'
       || (selectedLocation === 'unassigned' && !screen?.location_id)
       || screen?.location_id === selectedLocation;
-    const show = matchesName && matchesStatus && matchesGroup && matchesLocation;
+    const show = matchesName && matchesStatus && matchesPublication && matchesGroup && matchesLocation;
     card.classList.toggle('hidden', !show);
     if (show) visible.push(card);
   });
@@ -2935,6 +3355,12 @@ function refreshDraftPreviewForTime() {
       .filter(item => isPreviewItemActive(item, draftPreviewAt))
       .map(item => ({ ...item, previewSource: 'Skärmens grundspellista' }));
   }
+  if (draftPreviewScreen.playback_mode === 'random') {
+    for (let i = draftPreviewItems.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [draftPreviewItems[i], draftPreviewItems[j]] = [draftPreviewItems[j], draftPreviewItems[i]];
+    }
+  }
   const forcedCastActive = draftPreviewScreen.forced_slide_id
     && (!draftPreviewScreen.forced_until || draftPreviewAt.getTime() < new Date(draftPreviewScreen.forced_until).getTime());
   if (draftPreviewScreen.layout_type !== 'single' && !forcedCastActive) {
@@ -2944,7 +3370,9 @@ function refreshDraftPreviewForTime() {
     draftPreviewZoneItemCount = zoneSlides.length;
     draftPreviewZoneItem = draftPreviewScreen.playback_mode === 'sync'
       ? synchronizedPreviewItem(zoneSlides, draftPreviewAt)
-      : zoneSlides[0] || null;
+      : draftPreviewScreen.playback_mode === 'random'
+        ? zoneSlides[Math.floor(Math.random() * zoneSlides.length)] || null
+        : zoneSlides[0] || null;
     draftPreviewZonePosition = Math.max(0, zoneSlides.findIndex(item => item.id === draftPreviewZoneItem?.id));
     if (!draftPreviewZoneItem) draftPreviewZoneText = String(draftPreviewScreen.layout_text || '').trim();
   }
@@ -3053,7 +3481,7 @@ function renderDraftPreviewItem() {
   caption.textContent = `${kindLabel(item.kind)} · ${Number(item.duration_seconds) || 0} sekunder`;
   frame.append(caption);
   stage.append(createDraftPreviewComposition(frame, generation));
-  position.textContent = `${draftPreviewIndex + 1} av ${draftPreviewItems.length} · ${previewTimeLabel}`;
+  position.textContent = `${draftPreviewIndex + 1} av ${draftPreviewItems.length}${draftPreviewScreen?.playback_mode === 'random' ? ' · slumpad ordning' : ''} · ${previewTimeLabel}`;
   previous.disabled = draftPreviewIndex === 0;
   next.disabled = draftPreviewIndex >= draftPreviewItems.length - 1;
   refresh.disabled = !['feed','web'].includes(item.kind) && !['feed','web'].includes(draftPreviewZoneItem?.kind);
@@ -3064,6 +3492,10 @@ function createDraftPreviewComposition(primary, generation) {
   const showZone = layout !== 'single' && Boolean(draftPreviewZoneItem || draftPreviewZoneText);
   const composition = document.createElement('div');
   composition.className = `draft-preview-composition layout-${showZone ? layout : 'single'}`;
+  const splitPercent = Math.min(85, Math.max(55, Number(draftPreviewScreen?.layout_split_percent) || 72));
+  const tickerPercent = Math.min(25, Math.max(10, Number(draftPreviewScreen?.layout_ticker_percent) || 16));
+  if (showZone && layout === 'side_panel') composition.style.gridTemplateColumns = `minmax(0,${splitPercent}fr) minmax(0,${100 - splitPercent}fr)`;
+  if (showZone && layout === 'bottom_ticker') composition.style.gridTemplateRows = `minmax(0,${100 - tickerPercent}fr) minmax(0,${tickerPercent}fr)`;
   composition.append(primary);
   if (!showZone) return composition;
 
@@ -3416,6 +3848,8 @@ async function downloadScreenSupportBundle(screen, button) {
         playback_mode: screen.playback_mode,
         autostart_enabled: screen.autostart_enabled,
         layout_type: screen.layout_type,
+        layout_split_percent: screen.layout_split_percent,
+        layout_ticker_percent: screen.layout_ticker_percent,
         operating_weekdays: screen.operating_weekdays,
         operating_start_time: screen.operating_start_time,
         operating_end_time: screen.operating_end_time
@@ -3493,7 +3927,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
   card.innerHTML = `
     <div class="screen-head">
       <div class="screen-title-wrap"><input class="screen-select ${canEdit ? '' : 'hidden'}" type="checkbox" ${selectedScreenIds.has(screen.id) ? 'checked' : ''} aria-label="Välj ${esc(screen.name)}" /><div class="screen-icon">▣</div><div><div class="screen-name">${esc(screen.name)}</div><div class="screen-meta">${screen.is_active ? 'AKTIV' : 'PAUSAD'} · ${esc(screenGroup?.name || 'Ingen grupp')} · ${slides.length} objekt · skapad ${screen.created_at ? new Date(screen.created_at).toLocaleDateString('sv-SE') : 'okänt datum'}${sameNameCount > 1 ? ` · ${sameNameCount} profiler med samma namn` : ''}</div></div></div>
-      <div class="screen-actions">${pending}<button class="button ghost small preview-screen" type="button">Förhandsvisa utkast</button><button class="button primary small request-publish-screen ${!canAdmin && canEdit ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Skicka för godkännande</button><button class="button primary small publish-screen ${canAdmin ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Publicera</button><button class="button ghost small renew-pairing ${canAdmin ? '' : 'hidden'}">Ny kod</button><button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
+      <div class="screen-actions">${pending}<button class="button ghost small preview-screen" type="button">Förhandsvisa utkast</button><button class="button primary small request-publish-screen ${!canAdmin && canEdit ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Skicka för godkännande</button><button class="button primary small publish-screen ${canAdmin ? '' : 'hidden'}" ${screen.is_active ? '' : 'disabled'}>Publicera</button><button class="button ghost small renew-pairing ${canAdmin ? '' : 'hidden'}">Ny kod</button><button class="button ghost small toggle-screen ${canAdmin ? '' : 'hidden'}">${screen.is_active ? 'Pausa' : 'Aktivera'}</button><button class="button ghost small archive-screen ${canAdmin && !screen.is_active && !screen.archived_at && Object.prototype.hasOwnProperty.call(screen, 'archived_at') ? '' : 'hidden'}" type="button">Arkivera profil</button><button class="button ghost small delete-screen ${canAdmin ? '' : 'hidden'}">Ta bort</button></div>
     </div>
     <div class="screen-publication-state">Senast publicerad ${publication ? `version ${esc(publication.revision)} · ${esc(new Date(publication.published_at).toLocaleString('sv-SE'))}` : 'inte ännu'} · ${esc(publicationDeliverySummary(screen, publication))} · ändringar ligger som utkast tills du publicerar.</div>
     ${pendingPublicationRequest ? `<div class="publication-request-state"><span><strong>Väntar på publiceringsgodkännande</strong><small>Inskickad av ${esc(requestOwner)} · ${esc(new Date(pendingPublicationRequest.requested_at).toLocaleString('sv-SE'))}</small></span>${canAdmin ? `<div><button class="button primary small review-publication" type="button" data-decision="approve" data-request-id="${esc(pendingPublicationRequest.id)}">Godkänn och publicera</button><button class="button ghost small review-publication" type="button" data-decision="reject" data-request-id="${esc(pendingPublicationRequest.id)}">Avslå</button></div>` : ''}</div>` : latestPublicationRequest?.status === 'rejected' ? `<div class="publication-request-state rejected"><span><strong>Senaste publiceringsbegäran avslogs</strong><small>${esc(latestPublicationRequest.review_note || 'Ingen kommentar från admin.')}</small></span></div>` : ''}
@@ -3505,10 +3939,10 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
       <label class="screen-location-assignment ${canAdmin ? '' : 'hidden'}">Plats<select class="screen-location-select">${screenLocationOptions(screen.location_id || '')}</select><span>Platsmedlemmar får läsåtkomst till skärmens publicerade innehåll och historik.</span></label>
       <label class="screen-group-assignment ${canAdmin ? '' : 'hidden'}">Skärmgrupp<select class="screen-group-select">${screenGroupOptions(screen.group_id || '')}</select><span>Använd grupper för att sortera skärmar efter plats eller team.</span></label>
       <form class="screen-operating-form ${canAdmin ? '' : 'hidden'}"><div class="operating-heading"><strong>Öppettider</strong><span>TV:n visar svart utanför tiderna men fortsätter vara ansluten. Tider följer TV:ns lokala klocka.</span></div><div class="operating-days">${operatingDays.map(([day, label]) => `<label><input type="checkbox" name="operating_weekdays" value="${day}" ${selectedOperatingDays.includes(day) ? 'checked' : ''} /><span>${label}</span></label>`).join('')}</div><div class="operating-times"><label>Från<input name="operating_start_time" type="time" value="${esc(screen.operating_start_time || '')}" /></label><label>Till<input name="operating_end_time" type="time" value="${esc(screen.operating_end_time || '')}" /></label></div><button class="button ghost small" type="submit">Spara öppettider</button></form>
-      <label class="screen-playback-setting ${canAdmin ? '' : 'hidden'}">Uppspelningsläge<select class="screen-playback-mode"><option value="independent" ${screen.playback_mode !== 'sync' ? 'selected' : ''}>Fristående · starta lokalt</option><option value="sync" ${screen.playback_mode === 'sync' ? 'selected' : ''}>Synkad · gemensam tidslinje</option></select><span>Synka skärmar med samma aktiva innehållssekvens och schema. TV-enheterna behöver rätt klocka.</span></label>
+      <label class="screen-playback-setting ${canAdmin ? '' : 'hidden'}">Uppspelningsläge<select class="screen-playback-mode"><option value="independent" ${!['sync', 'random'].includes(screen.playback_mode) ? 'selected' : ''}>Fristående · ordnad rotation</option><option value="sync" ${screen.playback_mode === 'sync' ? 'selected' : ''}>Synkad · gemensam tidslinje</option><option value="random" ${screen.playback_mode === 'random' ? 'selected' : ''}>Slumpmässig · blanda innehållet</option></select><span>Slumpmässigt läge väljer nästa aktiva objekt utan att direkt upprepa det föregående. Synkat läge kräver rätt klocka på TV-enheterna.</span></label>
       <label class="screen-autostart-setting ${canAdmin ? '' : 'hidden'}"><span><strong>Starta spelaren när TV:n slås på</strong><small>Spelaren öppnas automatiskt efter omstart eller strömavbrott.</small></span><input class="screen-autostart" type="checkbox" ${screen.autostart_enabled !== false ? 'checked' : ''} aria-label="Starta Signage Player automatiskt vid TV-start" /></label>
       <label class="playlist-assignment ${canAdmin ? '' : 'hidden'}">Spellista för den här skärmen<select class="screen-playlist">${playlistOptions}</select><span>En spellista kan delas av flera skärmar.</span></label>
-      <form class="screen-layout-form ${canAdmin ? '' : 'hidden'}"><label>Skärmlayout<select name="layout_type"><option value="single" ${screen.layout_type === 'single' ? 'selected' : ''}>En zon · fullskärm</option><option value="bottom_ticker" ${screen.layout_type === 'bottom_ticker' ? 'selected' : ''}>Huvudyta + ticker längst ned</option><option value="side_panel" ${screen.layout_type === 'side_panel' ? 'selected' : ''}>Huvudyta + sidopanel</option></select></label><label>Spellista i zon 2<select name="zone_playlist_id"><option value="">Visa zontext</option>${playlists.map(playlist => `<option value="${esc(playlist.id)}" ${playlist.id === screen.zone_playlist_id ? 'selected' : ''}>${esc(playlist.name)}</option>`).join('')}</select></label><label class="layout-text-label">Zontext<input name="layout_text" maxlength="500" value="${esc(screen.layout_text || '')}" placeholder="Visas om zonspellistan saknar aktivt innehåll" /></label><button class="button ghost small" type="submit">Spara layout</button></form>
+      <form class="screen-layout-form ${canAdmin ? '' : 'hidden'}"><label>Skärmlayout<select name="layout_type"><option value="single" ${screen.layout_type === 'single' ? 'selected' : ''}>En zon · fullskärm</option><option value="bottom_ticker" ${screen.layout_type === 'bottom_ticker' ? 'selected' : ''}>Huvudyta + ticker längst ned</option><option value="side_panel" ${screen.layout_type === 'side_panel' ? 'selected' : ''}>Huvudyta + sidopanel</option></select></label><label>Huvudyta vid sidopanel (%)<input name="layout_split_percent" type="number" min="55" max="85" step="1" value="${Number(screen.layout_split_percent) || 72}" /><small>Andel av skärmbredden.</small></label><label>Tickerhöjd (%)<input name="layout_ticker_percent" type="number" min="10" max="25" step="1" value="${Number(screen.layout_ticker_percent) || 16}" /><small>Andel av skärmhöjden.</small></label><label>Spellista i zon 2<select name="zone_playlist_id"><option value="">Visa zontext</option>${playlists.map(playlist => `<option value="${esc(playlist.id)}" ${playlist.id === screen.zone_playlist_id ? 'selected' : ''}>${esc(playlist.name)}</option>`).join('')}</select></label><label class="layout-text-label">Zontext<input name="layout_text" maxlength="500" value="${esc(screen.layout_text || '')}" placeholder="Visas om zonspellistan saknar aktivt innehåll" /></label><button class="button ghost small" type="submit">Spara layout</button></form>
       <section class="channel-assignment ${canEdit ? '' : 'hidden'}"><div class="channel-heading"><div><strong>Kanalschema</strong><span>Aktiv kanal prioriteras framför skärmens grundspellista. Lägre prioritetstal vinner.</span></div></div><form class="channel-schedule-form"><select name="channel_id" required>${channelOptions}</select><input name="priority" type="number" min="0" max="1000" value="100" aria-label="Kanalprioritet" />${scheduleFields()}<button class="button ghost small" type="submit">＋ Schemalägg kanal</button></form><div class="channel-schedule-list">${assignedChannels.map(item => { const channel = channels.find(c => c.id === item.channel_id); return `<article class="channel-schedule-entry"><div class="channel-schedule-row"><div><strong>${esc(channel?.name || 'Okänd kanal')}</strong><span>Prioritet ${item.priority} · ${scheduleSummary(item)}</span></div><button class="button ghost small remove-channel-schedule" type="button" data-id="${esc(item.id)}">Ta bort</button></div><details class="channel-schedule-edit"><summary>Ändra tider och prioritet</summary><form data-channel-schedule-edit="${esc(item.id)}"><label>Prioritet<input name="priority" type="number" min="0" max="1000" value="${Number(item.priority)}" required /></label>${scheduleFields(item)}<button class="button ghost small" type="submit">Spara schema som utkast</button></form></details></article>`; }).join('') || '<div class="slide-sub">Inga kanaler schemalagda för den här skärmen.</div>'}</div></section>
       <div class="player-operations ${canEdit ? '' : 'hidden'}"><div><strong>Fjärråtgärder</strong><span class="player-command-status" data-command-status>${esc(formatCommandStatus(latestCommand))}</span></div><div class="player-operation-buttons"><button class="button ghost small" data-player-command="sync_now">Synka nu</button><button class="button ghost small" data-player-command="capture_preview" ${isOnline(screen) ? "" : "disabled"} title="${isOnline(screen) ? "Begär en ny skärmbild från TV:n." : "TV:n måste vara online för att skicka en ny skärmbild."}">Uppdatera livebild</button><button class="button ghost small" data-player-command="restart_player">Starta om spelaren</button><button class="button ghost small" data-support-bundle>Hämta felsökningspaket</button></div></div>
       <div class="playlist-control"><div><strong>Visningsläge</strong><span>${screen.forced_slide_id ? 'En post är vald manuellt.' : 'TV:n roterar innehållet i spellistan.'}</span></div><button class="button ghost small return-playlist ${screen.forced_slide_id && canEdit ? '' : 'hidden'}">Återgå till spellistan</button></div>
@@ -3676,6 +4110,15 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     const { error } = await supabase.from('screens').update({ is_active: !screen.is_active }).eq('id', screen.id);
     if (error) toast(error.message, true); else loadScreens();
   });
+  card.querySelector('.archive-screen').addEventListener('click', async () => {
+    if (currentRole !== 'admin' || screen.is_active || !Object.prototype.hasOwnProperty.call(screen, 'archived_at')) return;
+    if (!confirm(`Arkivera den pausade profilen ”${screen.name}”? Den försvinner från vanliga skärmlistor, medan historik och innehåll bevaras. Du kan återställa profilen från Organisation → Arkiverade skärmar.`)) return;
+    const { error } = await supabase.from('screens').update({ is_active: false, archived_at: new Date().toISOString() }).eq('id', screen.id);
+    if (error) return toast(error.message, true);
+    selectedScreenDetailId = null;
+    toast(`”${screen.name}” arkiverades. Historik och innehåll finns kvar.`);
+    await loadScreens();
+  });
   card.querySelector('.renew-pairing').addEventListener('click', async () => {
     if (!confirm(`Skapa en ny kod för ”${screen.name}”? Den befintliga TV:n kopplas inte bort. Använd bara detta när du återställer eller parkopplar om spelaren.`)) return;
     const { data: code, error } = await supabase.rpc('renew_screen_pairing_code', { input_screen_id: screen.id });
@@ -3703,10 +4146,11 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     await loadScreens();
   });
   card.querySelector('.screen-playback-mode').addEventListener('change', async event => {
-    const playback_mode = event.currentTarget.value === 'sync' ? 'sync' : 'independent';
+    const playback_mode = ['sync', 'random'].includes(event.currentTarget.value) ? event.currentTarget.value : 'independent';
     const { error } = await supabase.from('screens').update({ playback_mode }).eq('id', screen.id);
     if (error) return toast(error.message, true);
-    toast(playback_mode === 'sync' ? 'Synkad uppspelning aktiveras på nästa synk.' : 'Fristående uppspelning aktiveras på nästa synk.');
+    const label = { sync: 'Synkad', random: 'Slumpmässig', independent: 'Fristående' }[playback_mode];
+    toast(`${label} uppspelning aktiveras på nästa synk.`);
     await loadScreens();
   });
   card.querySelector('.screen-autostart').addEventListener('change', async event => {
@@ -3729,8 +4173,12 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
     const layout_type = String(f.get('layout_type'));
     const layout_text = String(f.get('layout_text') || '').trim();
     const zone_playlist_id = String(f.get('zone_playlist_id') || '') || null;
+    const layout_split_percent = Number(f.get('layout_split_percent'));
+    const layout_ticker_percent = Number(f.get('layout_ticker_percent'));
+    if (!Number.isInteger(layout_split_percent) || layout_split_percent < 55 || layout_split_percent > 85) return toast('Huvudytan måste vara mellan 55 och 85 procent.', true);
+    if (!Number.isInteger(layout_ticker_percent) || layout_ticker_percent < 10 || layout_ticker_percent > 25) return toast('Tickerhöjden måste vara mellan 10 och 25 procent.', true);
     if (layout_type !== 'single' && !layout_text && !zone_playlist_id) return toast('Välj en zonspellista eller skriv zontext.', true);
-    const { error } = await supabase.from('screens').update({ layout_type, layout_text, zone_playlist_id }).eq('id', screen.id);
+    const { error } = await supabase.from('screens').update({ layout_type, layout_text, zone_playlist_id, layout_split_percent, layout_ticker_percent }).eq('id', screen.id);
     if (error) return toast(error.message, true);
     toast('Skärmlayouten och zonspellistan sparades som utkast. Publicera skärmen för att skicka ändringen till TV:n.');
     await loadScreens();

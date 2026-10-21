@@ -17,6 +17,7 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.PixelCopy
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -310,7 +311,7 @@ class MainActivity : Activity() {
                         if (!wasPaused || changed || configChanged) showPausedScreen()
                     } else if (outsideOperatingHours) {
                         if (wasPaused || !wasClosed || changed || configChanged) showOperatingHoursScreen()
-                    } else if (changed || configChanged || wasClosed || wasPaused || fresh.length() == 0) {
+                    } else if (currentSlide == null || changed || configChanged || wasClosed || wasPaused || fresh.length() == 0) {
                         if (changed) index = 0
                         showCurrentSlide()
                     }
@@ -409,7 +410,8 @@ class MainActivity : Activity() {
         onComplete?.let { synchronized(pendingPreviewCallbacks) { pendingPreviewCallbacks.add(it) } }
         val scale = minOf(1f, 1280f / width)
         val bitmap = Bitmap.createBitmap((width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1), Bitmap.Config.RGB_565)
-        PixelCopy.request(window, bitmap, { result ->
+        try {
+            PixelCopy.request(window, bitmap, { result ->
             if (result != PixelCopy.SUCCESS) {
                 bitmap.recycle()
                 finishPreviewCapture("TV-bilden kunde inte läsas av (PixelCopy $result).")
@@ -437,7 +439,14 @@ class MainActivity : Activity() {
                     finishPreviewCapture(error)
                 }
             }
-        }, handler)
+            }, handler)
+        } catch (exception: IllegalArgumentException) {
+            // Android TV can temporarily detach the window surface while WebView
+            // navigates or the display changes state. PixelCopy throws in that
+            // case; skip this preview instead of crashing the signage player.
+            bitmap.recycle()
+            finishPreviewCapture("TV-bilden är tillfälligt inte tillgänglig.")
+        }
     }
 
     private fun finishPreviewCapture(error: String?) {
@@ -503,9 +512,7 @@ class MainActivity : Activity() {
         dashboardRefreshTask?.let(handler::removeCallbacks)
         dashboardRefreshTask = null
         playerVideo?.stopPlayback()
-        dashboardView?.stopLoading()
-        dashboardView?.destroy()
-        dashboardView = null
+        destroyDashboardView()
         clearSecondaryZone()
         playerVideo = null
         root.removeAllViews()
@@ -536,9 +543,13 @@ class MainActivity : Activity() {
         }
         val eligibleIds = eligible.map { it.optString("id") }.toSet()
         val timedSelection = if (isSynchronizedPlayback()) synchronizedSelection(eligible) else null
-        val item = timedSelection?.first ?: (0 until slides.length()).map { (index + it) % slides.length() }
-            .mapNotNull { slides.optJSONObject(it) }
-            .firstOrNull { it.optString("id") in eligibleIds } ?: eligible[0]
+        val item = timedSelection?.first ?: if (isRandomPlayback()) {
+            randomSelection(eligible, currentSlide?.optString("id"))
+        } else {
+            (0 until slides.length()).map { (index + it) % slides.length() }
+                .mapNotNull { slides.optJSONObject(it) }
+                .firstOrNull { it.optString("id") in eligibleIds } ?: eligible[0]
+        }
         index = (0 until slides.length()).firstOrNull { slides.optJSONObject(it)?.optString("id") == item.optString("id") } ?: 0
         currentSlide = item
         currentTitle = item.optString("title").ifBlank { "Väntar på innehåll" }
@@ -556,8 +567,14 @@ class MainActivity : Activity() {
             else -> showText(item.optString("title"), item.optString("body"))
         }
         applyMultiZoneLayout(item)
-        advanceTask = Runnable { index = (index + 1) % slides.length(); showCurrentSlide() }
-        handler.postDelayed(advanceTask!!, duration)
+        // A lone scheduled item has nowhere to advance to. Recreating its
+        // WebView on every item duration causes needless full-page reloads
+        // (and can lose dashboard state). The schedule poll above still
+        // switches it when a different item becomes eligible.
+        if (eligible.size > 1) {
+            advanceTask = Runnable { index = (index + 1) % slides.length(); showCurrentSlide() }
+            handler.postDelayed(advanceTask!!, duration)
+        }
     }
 
     private fun applyMultiZoneLayout(item: JSONObject?) {
@@ -576,11 +593,13 @@ class MainActivity : Activity() {
             if (width <= 0 || height <= 0) return@post
             val panel = FrameLayout(this).apply { setBackgroundColor(Color.rgb(28, 37, 53)) }
             if (layout == "bottom_ticker") {
-                val panelHeight = (height * .16f).toInt().coerceAtLeast(80)
+                val tickerPercent = layoutItem?.optInt("layout_ticker_percent", 16)?.coerceIn(10, 25) ?: 16
+                val panelHeight = (height * tickerPercent / 100f).toInt().coerceIn(48, maxOf(48, height / 2))
                 primary.layoutParams = FrameLayout.LayoutParams(-1, height - panelHeight, Gravity.TOP)
                 root.addView(panel, FrameLayout.LayoutParams(-1, panelHeight, Gravity.BOTTOM))
             } else if (layout == "side_panel") {
-                val primaryWidth = (width * .72f).toInt()
+                val splitPercent = layoutItem?.optInt("layout_split_percent", 72)?.coerceIn(55, 85) ?: 72
+                val primaryWidth = (width * splitPercent / 100f).toInt()
                 primary.layoutParams = FrameLayout.LayoutParams(primaryWidth, -1, Gravity.LEFT)
                 root.addView(panel, FrameLayout.LayoutParams(width - primaryWidth, -1, Gravity.RIGHT))
             }
@@ -588,7 +607,9 @@ class MainActivity : Activity() {
             if (scheduled.isEmpty()) showSecondaryZoneText(panel, copy, layout)
             else {
                 val timedSelection = if (isSynchronizedPlayback()) synchronizedSelection(scheduled) else null
-                val selected = timedSelection?.first ?: scheduled[zoneIndex.mod(scheduled.size)]
+                val selected = timedSelection?.first ?: if (isRandomPlayback()) {
+                    randomSelection(scheduled, null)
+                } else scheduled[zoneIndex.mod(scheduled.size)]
                 zoneIndex = scheduled.indexOfFirst { it.optString("id") == selected.optString("id") }.coerceAtLeast(0)
                 showSecondaryZoneSlide(panel, selected, layout, timedSelection?.second)
             }
@@ -602,8 +623,11 @@ class MainActivity : Activity() {
         zoneWebRefreshTask?.let(handler::removeCallbacks)
         zoneWebRefreshTask = null
         zoneVideo?.stopPlayback()
-        zoneWebView?.stopLoading()
-        zoneWebView?.destroy()
+        zoneWebView?.let { web ->
+            (web.parent as? ViewGroup)?.removeView(web)
+            web.stopLoading()
+            web.destroy()
+        }
         zoneRoot = null
         zoneVideo = null
         zoneWebView = null
@@ -750,8 +774,14 @@ class MainActivity : Activity() {
                         zoneIndex = available.indexOfFirst { it.optString("id") == timedSelection.first.optString("id") }.coerceAtLeast(0)
                         showSecondaryZoneSlide(container, timedSelection.first, layout, timedSelection.second)
                     } else {
-                        zoneIndex = (zoneIndex + 1) % available.size
-                        showSecondaryZoneSlide(container, available[zoneIndex], layout)
+                        val selected = if (isRandomPlayback()) {
+                            randomSelection(available, item.optString("id"))
+                        } else {
+                            zoneIndex = (zoneIndex + 1) % available.size
+                            available[zoneIndex]
+                        }
+                        zoneIndex = available.indexOfFirst { it.optString("id") == selected.optString("id") }.coerceAtLeast(0)
+                        showSecondaryZoneSlide(container, selected, layout)
                     }
                 } else if (zoneRoot === container) {
                     showSecondaryZoneText(container, item.optString("layout_text"), layout)
@@ -797,6 +827,14 @@ class MainActivity : Activity() {
         }
         dashboardRefreshTask = refresh
         handler.postDelayed(refresh, item.optInt("refresh_interval_seconds", 30).coerceIn(10, 3600) * 1000L)
+    }
+
+    private fun destroyDashboardView() {
+        val web = dashboardView ?: return
+        (web.parent as? ViewGroup)?.removeView(web)
+        web.stopLoading()
+        web.destroy()
+        dashboardView = null
     }
 
     private fun reportHeartbeat(item: JSONObject?) {
@@ -882,6 +920,15 @@ class MainActivity : Activity() {
     }
 
     private fun isSynchronizedPlayback(): Boolean = screenConfig.optString("playback_mode") == "sync"
+
+    private fun isRandomPlayback(): Boolean = screenConfig.optString("playback_mode") == "random"
+
+    private fun randomSelection(items: List<JSONObject>, currentId: String?): JSONObject {
+        val alternatives = if (items.size > 1 && !currentId.isNullOrBlank()) {
+            items.filterNot { it.optString("id") == currentId }
+        } else items
+        return alternatives.randomOrNull() ?: items.first()
+    }
 
     /** Derive the same cyclic item and next boundary on every player using the wall clock. */
     private fun synchronizedSelection(items: List<JSONObject>): Pair<JSONObject, Long>? {
@@ -1499,8 +1546,7 @@ class MainActivity : Activity() {
         dashboardRefreshTask?.let(handler::removeCallbacks)
         dashboardRefreshTask = null
         playerVideo?.stopPlayback()
-        dashboardView?.stopLoading()
-        dashboardView?.destroy()
+        destroyDashboardView()
         clearSecondaryZone()
         playerVideo = null
         dashboardView = null
@@ -1523,8 +1569,7 @@ class MainActivity : Activity() {
         dashboardRefreshTask?.let(handler::removeCallbacks)
         dashboardRefreshTask = null
         playerVideo?.stopPlayback()
-        dashboardView?.stopLoading()
-        dashboardView?.destroy()
+        destroyDashboardView()
         clearSecondaryZone()
         playerVideo = null
         dashboardView = null
@@ -1636,10 +1681,12 @@ class MainActivity : Activity() {
         deviceReportTask?.let(handler::removeCallbacks)
         scheduleTask?.let(handler::removeCallbacks)
         playerVideo?.stopPlayback()
-        dashboardView?.stopLoading()
-        dashboardView?.destroy()
-        zoneWebView?.stopLoading()
-        zoneWebView?.destroy()
+        destroyDashboardView()
+        zoneWebView?.let { web ->
+            (web.parent as? ViewGroup)?.removeView(web)
+            web.stopLoading()
+            web.destroy()
+        }
         worker.shutdownNow()
         previewWorker.shutdownNow()
         super.onDestroy()
