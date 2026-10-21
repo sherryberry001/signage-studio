@@ -30,7 +30,7 @@ Screen draft preview and append-only restore are available in the screen cards; 
 ## Delivery order
 
 1. Stabilize the player-to-admin operations loop: confirmed heartbeats, live previews, duplicate-screen cleanup, clear online/offline states, and actionable operational alerts with admin-configurable thresholds.
-2. Make content publishing dependable: library lifecycle, preview, schedule visibility, and predictable caching/offline behavior.
+2. Make content publishing dependable: library lifecycle, schedule visibility, and predictable caching/offline behavior.
 3. Add operational reporting: playback proof, screen health history, alerts, and exports.
 4. Expand live integrations through a documented connector model; keep secrets in protected storage and show failures clearly.
 5. Extend organization workflows: granular creator/publisher/manager access, exportable audit, SSO, and multi-screen publishing.

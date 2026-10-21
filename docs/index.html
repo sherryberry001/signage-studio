@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261130-channel-playlist-order-v1" />
-    <script type="module" src="./app.js?v=20261130-channel-playlist-order-v1"></script>
+    <link rel="stylesheet" href="./style.css?v=20261201-schedule-aware-preview-v1" />
+    <script type="module" src="./app.js?v=20261201-schedule-aware-preview-v1"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -126,7 +126,8 @@
       </section>
       <dialog id="draftPreviewDialog" class="draft-preview-dialog" aria-labelledby="draftPreviewTitle">
         <header class="draft-preview-header"><div><span class="section-kicker">UTKAST · FÖRHANDSVISNING</span><h2 id="draftPreviewTitle">Skärm</h2></div><button class="icon-button" type="button" data-preview-close aria-label="Stäng förhandsvisning">×</button></header>
-        <p class="draft-preview-note">Granska utkastet före publicering. Webbsidor och live-feeds hämtas från källan nu; en webbplats kan neka inbäddning, och Pulse-token skickas aldrig till webbläsaren.</p>
+        <p class="draft-preview-note">Granska utkastet före publicering. Förhandsvisningen väljer kanal och innehåll enligt schemat vid vald tid. Tillfälliga ”Visa nu”-val kan ersätta schemat medan de gäller. Tiden tolkas i webbläsarens tidszon; TV:n använder sin lokala klocka. Webbsidor och live-feeds hämtas nu, och Pulse-token skickas aldrig till webbläsaren.</p>
+        <form id="draftPreviewTimeForm" class="draft-preview-time-form"><label for="draftPreviewAt">Visa schemat vid</label><input id="draftPreviewAt" type="datetime-local" required /><button class="button ghost small" type="submit">Uppdatera förhandsvisning</button></form>
         <div class="draft-preview-stage" data-preview-stage></div>
         <footer class="draft-preview-controls"><span data-preview-position></span><div><button class="button ghost small" type="button" data-preview-refresh>↻ Uppdatera live</button><button class="button ghost small" type="button" data-preview-prev>← Föregående</button><button class="button ghost small" type="button" data-preview-next>Nästa →</button></div></footer>
       </dialog>

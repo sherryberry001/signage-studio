@@ -129,6 +129,12 @@ function formatUploadSize(bytes) {
 }
 let draftPreviewItems = [];
 let draftPreviewIndex = 0;
+let draftPreviewEmptyMessage = 'Inget innehåll i utkastet ännu.';
+let draftPreviewScreen = null;
+let draftPreviewBaseSlides = [];
+let draftPreviewChannelSlides = [];
+let draftPreviewScreenSchedules = [];
+let draftPreviewAt = new Date();
 let draftPreviewGeneration = 0;
 let draftPreviewAbortController = null;
 let draftPreviewRefreshTimer = null;
@@ -2529,16 +2535,116 @@ function kindLabel(kind) {
   return ({ text: 'Textmeddelande', image: 'Bild', video: 'Video', clock: 'Klocka & datum', feed: 'JSON-feed', web: 'Webbsida / live dashboard', sleep: 'Utanför öppettider', paused: 'Pausad' })[kind] || kind || '—';
 }
 
-function openDraftPreview(screen, slides, channelSlides) {
+function openDraftPreview(screen, slides, channelSlides, assignedChannels) {
   const dialog = $('#draftPreviewDialog');
-  draftPreviewItems = [
-    ...slides.map(item => ({ ...item, previewSource: 'Skärmens grundspellista' })),
-    ...channelSlides.map(item => ({ ...item, previewSource: `Kanalutkast · ${playlists.find(playlist => playlist.id === item.playlist_id)?.name || 'spellista'}` }))
-  ];
+  draftPreviewScreen = screen;
+  draftPreviewBaseSlides = slides;
+  draftPreviewChannelSlides = channelSlides;
+  draftPreviewScreenSchedules = assignedChannels;
+  draftPreviewAt = new Date();
+  $('#draftPreviewAt').value = localDateTimeInput(draftPreviewAt.toISOString());
+  refreshDraftPreviewForTime();
   draftPreviewIndex = 0;
   $('#draftPreviewTitle').textContent = screen.name;
-  renderDraftPreviewItem();
   if (!dialog.open) dialog.showModal();
+}
+
+function previewWeekday(date) {
+  return date.getDay() === 0 ? 7 : date.getDay();
+}
+
+function isPreviewScheduleActive(schedule, date) {
+  if (schedule.active_from && date.getTime() < new Date(schedule.active_from).getTime()) return false;
+  if (schedule.active_until && date.getTime() >= new Date(schedule.active_until).getTime()) return false;
+  const selectedDays = (schedule.weekdays || []).map(Number);
+  const weekday = previewWeekday(date);
+  const isSelected = day => selectedDays.length === 0 || selectedDays.includes(day);
+  const start = String(schedule.daily_start_time || '').slice(0, 5);
+  const end = String(schedule.daily_end_time || '').slice(0, 5);
+  if (!start || !end) return isSelected(weekday);
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  if (start <= end) return isSelected(weekday) && time >= start && time < end;
+  if (time >= start) return isSelected(weekday);
+  if (time < end) return isSelected(weekday === 1 ? 7 : weekday - 1);
+  return false;
+}
+
+function isPreviewItemActive(item, date) {
+  if (item.is_active === false) return false;
+  if (item.expires_at && date.getTime() >= new Date(item.expires_at).getTime()) return false;
+  return isPreviewScheduleActive(item, date);
+}
+
+function isWithinPreviewOperatingHours(screen, date) {
+  const selectedDays = (screen.operating_weekdays || []).map(Number);
+  const weekday = previewWeekday(date);
+  const isSelected = day => selectedDays.length === 0 || selectedDays.includes(day);
+  const start = String(screen.operating_start_time || '').slice(0, 5);
+  const end = String(screen.operating_end_time || '').slice(0, 5);
+  if (!start && !end) return isSelected(weekday);
+  if (!start || !end) return true;
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  if (start === end) return isSelected(weekday);
+  if (start < end) return isSelected(weekday) && time >= start && time < end;
+  if (time >= start) return isSelected(weekday);
+  if (time < end) return isSelected(weekday === 1 ? 7 : weekday - 1);
+  return false;
+}
+
+function refreshDraftPreviewForTime() {
+  const input = $('#draftPreviewAt');
+  const selectedTime = input.value ? new Date(input.value) : null;
+  if (!selectedTime || Number.isNaN(selectedTime.getTime())) {
+    return toast('Välj en giltig tid för förhandsvisningen.', true);
+  }
+  draftPreviewAt = selectedTime;
+  draftPreviewIndex = 0;
+  if (!draftPreviewScreen?.is_active) {
+    draftPreviewItems = [];
+    draftPreviewEmptyMessage = 'Skärmen är pausad. Utkastet kan granskas, men spelaren visar inget innehåll förrän skärmen aktiveras.';
+    renderDraftPreviewItem();
+    return;
+  }
+  if (!isWithinPreviewOperatingHours(draftPreviewScreen, draftPreviewAt)) {
+    draftPreviewItems = [];
+    draftPreviewEmptyMessage = 'Skärmen ska visa svart utanför sina öppettider.';
+    renderDraftPreviewItem();
+    return;
+  }
+
+  const activeChannelItems = [];
+  draftPreviewScreenSchedules.filter(schedule => isPreviewScheduleActive(schedule, draftPreviewAt)).forEach(schedule => {
+    const channel = channels.find(item => item.id === schedule.channel_id);
+    channelPlaylists.filter(item => item.channel_id === schedule.channel_id && isPreviewScheduleActive(item, draftPreviewAt))
+      .forEach(membership => {
+        const playlist = playlists.find(item => item.id === membership.playlist_id);
+        draftPreviewChannelSlides.filter(item => item.playlist_id === membership.playlist_id && isPreviewItemActive(item, draftPreviewAt))
+          .forEach(item => activeChannelItems.push({
+            ...item,
+            channelId: schedule.channel_id,
+            channelPriority: Number(schedule.priority ?? 100),
+            playlistPriority: Number(membership.priority ?? 100),
+            playlistOrder: Number(membership.sort_order ?? 0),
+            previewSource: `Kanal · ${channel?.name || 'Okänd kanal'} · ${playlist?.name || 'spellista'}`
+          }));
+      });
+  });
+
+  if (activeChannelItems.length) {
+    activeChannelItems.sort((left, right) => left.channelPriority - right.channelPriority
+      || left.playlistPriority - right.playlistPriority
+      || left.playlistOrder - right.playlistOrder
+      || Number(left.sort_order || 0) - Number(right.sort_order || 0)
+      || new Date(left.created_at || 0) - new Date(right.created_at || 0));
+    const selectedChannelId = activeChannelItems[0].channelId;
+    draftPreviewItems = activeChannelItems.filter(item => item.channelId === selectedChannelId);
+  } else {
+    draftPreviewItems = draftPreviewBaseSlides
+      .filter(item => isPreviewItemActive(item, draftPreviewAt))
+      .map(item => ({ ...item, previewSource: 'Skärmens grundspellista' }));
+  }
+  draftPreviewEmptyMessage = 'Inget utkast är schemalagt att visas vid den valda tiden.';
+  renderDraftPreviewItem();
 }
 
 function renderDraftPreviewItem() {
@@ -2547,6 +2653,7 @@ function renderDraftPreviewItem() {
   const previous = $('[data-preview-prev]');
   const next = $('[data-preview-next]');
   const refresh = $('[data-preview-refresh]');
+  const previewTimeLabel = new Intl.DateTimeFormat('sv-SE', { dateStyle: 'short', timeStyle: 'short' }).format(draftPreviewAt);
   clearInterval(draftPreviewRefreshTimer);
   draftPreviewRefreshTimer = null;
   draftPreviewAbortController?.abort();
@@ -2557,9 +2664,9 @@ function renderDraftPreviewItem() {
   if (!item) {
     const empty = document.createElement('div');
     empty.className = 'draft-preview-empty';
-    empty.textContent = 'Inget innehåll i utkastet ännu.';
+    empty.textContent = draftPreviewEmptyMessage;
     stage.append(empty);
-    position.textContent = '0 objekt';
+    position.textContent = `0 objekt · ${previewTimeLabel}`;
     previous.disabled = true;
     next.disabled = true;
     refresh.disabled = true;
@@ -2629,7 +2736,7 @@ function renderDraftPreviewItem() {
     content.append(title);
     const body = document.createElement('p');
     if (item.kind === 'text') body.textContent = item.body || '';
-    else if (item.kind === 'clock') body.textContent = `${item.body || ''}${item.body ? ' · ' : ''}${new Intl.DateTimeFormat('sv-SE', { dateStyle: 'full', timeStyle: 'short' }).format(new Date())}`;
+    else if (item.kind === 'clock') body.textContent = `${item.body || ''}${item.body ? ' · ' : ''}${new Intl.DateTimeFormat('sv-SE', { dateStyle: 'full', timeStyle: 'short' }).format(draftPreviewAt)}`;
     else body.textContent = item.body || 'Förhandsvisning av utkast';
     content.append(body);
     frame.append(content);
@@ -2639,7 +2746,7 @@ function renderDraftPreviewItem() {
   caption.textContent = `${kindLabel(item.kind)} · ${Number(item.duration_seconds) || 0} sekunder`;
   frame.append(caption);
   stage.append(frame);
-  position.textContent = `${draftPreviewIndex + 1} av ${draftPreviewItems.length}`;
+  position.textContent = `${draftPreviewIndex + 1} av ${draftPreviewItems.length} · ${previewTimeLabel}`;
   previous.disabled = draftPreviewIndex === 0;
   next.disabled = draftPreviewIndex >= draftPreviewItems.length - 1;
   refresh.disabled = !['feed','web'].includes(item.kind);
@@ -2828,6 +2935,10 @@ function previewValue(value) {
 }
 
 $('#draftPreviewDialog').querySelector('[data-preview-close]').addEventListener('click', () => $('#draftPreviewDialog').close());
+$('#draftPreviewTimeForm').addEventListener('submit', event => {
+  event.preventDefault();
+  refreshDraftPreviewForTime();
+});
 $('[data-preview-prev]').addEventListener('click', () => { draftPreviewIndex = Math.max(0, draftPreviewIndex - 1); renderDraftPreviewItem(); });
 $('[data-preview-next]').addEventListener('click', () => { draftPreviewIndex = Math.min(draftPreviewItems.length - 1, draftPreviewIndex + 1); renderDraftPreviewItem(); });
 $('[data-preview-refresh]').addEventListener('click', renderDraftPreviewItem);
@@ -3038,7 +3149,7 @@ function renderScreen(screen, slides, assignedChannels = [], sameNameCount = 1, 
         <div class="add-box"><h3>Webbsida eller live-dashboard</h3><form class="text-slide-form add-web"><input name="title" maxlength="80" placeholder="Namn på sidan" required /><input name="url" type="url" placeholder="https://…" required /><div class="inline-fields"><input name="duration" type="number" min="5" max="600" value="60" aria-label="Visningstid i sekunder" /><button class="button primary" type="submit">Lägg till sida</button></div>${scheduleFields()}</form></div>
       </div>
     </div>`;
-  card.querySelector('.preview-screen').addEventListener('click', () => openDraftPreview(screen, slides, channelSlides));
+  card.querySelector('.preview-screen').addEventListener('click', () => openDraftPreview(screen, slides, channelSlides, assignedChannels));
   card.querySelector('.request-publish-screen').addEventListener('click', async event => {
     const button = event.currentTarget;
     button.disabled = true;
