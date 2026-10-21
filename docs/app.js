@@ -153,6 +153,10 @@ let screenPublications = [];
 let screenBroadcasts = [];
 let screenBroadcastDelivery = [];
 let screenBroadcastDeliveryAvailable = true;
+let screenBroadcastHistory = [];
+let screenBroadcastHistoryDelivery = [];
+let screenBroadcastHistoryDeliveryAvailable = true;
+let screenBroadcastHistoryLoaded = false;
 let mediaLibrary = [];
 let mediaFolders = [];
 let mediaLibraryVersions = [];
@@ -268,6 +272,18 @@ function setSession(user) {
   authView.classList.toggle('hidden', Boolean(user));
   appView.classList.toggle('hidden', !user);
   if (user) {
+    if (!sameUser) {
+      screenBroadcasts = [];
+      screenBroadcastDelivery = [];
+      screenBroadcastDeliveryAvailable = true;
+      screenBroadcastHistory = [];
+      screenBroadcastHistoryDelivery = [];
+      screenBroadcastHistoryDeliveryAvailable = true;
+      screenBroadcastHistoryLoaded = false;
+      $('#screenBroadcastHistoryDisclosure').open = false;
+      $('#screenBroadcastList').replaceChildren();
+      $('#screenBroadcastHistory').textContent = 'Öppna för att läsa historiken.';
+    }
     $('#userEmail').textContent = user.email || 'Admin';
     if (!sameUser || !currentRole) loadScreens();
     clearInterval(statusTimer);
@@ -290,6 +306,16 @@ function setSession(user) {
     teamMembers = [];
     screenCommands = [];
     screenPublications = [];
+    screenBroadcasts = [];
+    screenBroadcastDelivery = [];
+    screenBroadcastDeliveryAvailable = true;
+    screenBroadcastHistory = [];
+    screenBroadcastHistoryDelivery = [];
+    screenBroadcastHistoryDeliveryAvailable = true;
+    screenBroadcastHistoryLoaded = false;
+    $('#screenBroadcastHistoryDisclosure').open = false;
+    $('#screenBroadcastList').replaceChildren();
+    $('#screenBroadcastHistory').textContent = 'Öppna för att läsa historiken.';
     integrationStatuses = [];
     mediaLibrary = [];
     mediaFolders = [];
@@ -1843,6 +1869,10 @@ $('#publishSelectedScreens').addEventListener('click', publishSelectedScreens);
 $('#screenBroadcastForm').addEventListener('submit', sendScreenBroadcast);
 $('#screenBroadcastForm [name="asset_id"]').addEventListener('change', updateBroadcastTextRequirement);
 $('#screenBroadcastList').addEventListener('click', cancelScreenBroadcastFromList);
+$('#screenBroadcastHistoryDisclosure').addEventListener('toggle', event => {
+  if (event.currentTarget.open && !screenBroadcastHistoryLoaded) loadScreenBroadcastHistory();
+});
+$('#refreshScreenBroadcastHistory').addEventListener('click', loadScreenBroadcastHistory);
 $('#assignSelectedGroup').addEventListener('click', assignSelectedScreensToGroup);
 $('#assignSelectedLocation').addEventListener('click', assignSelectedScreensToLocation);
 
@@ -2073,6 +2103,94 @@ async function loadScreenBroadcastDelivery() {
   const { data, error } = await supabase.rpc('team_broadcast_delivery_summary', { input_broadcast_ids: ids });
   screenBroadcastDeliveryAvailable = !error;
   if (!error) screenBroadcastDelivery = data || [];
+}
+
+async function loadScreenBroadcastHistory() {
+  const list = $('#screenBroadcastHistory');
+  if (!list) return;
+  list.textContent = 'Läser utskickshistorik …';
+  const now = new Date();
+  const since = new Date(now.getTime() - 30 * 86400_000).toISOString();
+  const until = now.toISOString();
+  const { data, error } = await supabase.from('screen_broadcasts')
+    .select('id,slide_id,title,body,kind,starts_at,ends_at,created_at,cancelled_at,screen_broadcast_targets(screen_id,superseded_at)')
+    .gte('created_at', since)
+    .or(`cancelled_at.not.is.null,ends_at.lt.${until}`)
+    .order('created_at', { ascending: false })
+    .limit(100);
+  if (error) {
+    screenBroadcastHistoryLoaded = false;
+    list.textContent = `Kunde inte läsa historiken: ${error.message}`;
+    return;
+  }
+  screenBroadcastHistory = data || [];
+  if (!screenBroadcastHistory.length) {
+    screenBroadcastHistoryDelivery = [];
+    screenBroadcastHistoryDeliveryAvailable = true;
+    screenBroadcastHistoryLoaded = true;
+    renderScreenBroadcastHistory();
+    return;
+  }
+  const receiptResult = await supabase.rpc('team_broadcast_delivery_summary', {
+    input_broadcast_ids: screenBroadcastHistory.map(item => item.id)
+  });
+  screenBroadcastHistoryDeliveryAvailable = !receiptResult.error;
+  if (!receiptResult.error) screenBroadcastHistoryDelivery = receiptResult.data || [];
+  screenBroadcastHistoryLoaded = true;
+  renderScreenBroadcastHistory();
+}
+
+function renderScreenBroadcastHistory() {
+  const list = $('#screenBroadcastHistory');
+  if (!list) return;
+  if (!screenBroadcastHistory.length) {
+    list.innerHTML = '<span class="screen-groups-empty">Inga avslutade eller avbrutna utskick under de senaste 30 dagarna.</span>';
+    return;
+  }
+  const receiptsByTarget = new Map(screenBroadcastHistoryDelivery.map(receipt => [`${receipt.broadcast_id}:${receipt.screen_id}`, receipt]));
+  list.replaceChildren(...screenBroadcastHistory.map(item => {
+    const targets = (item.screen_broadcast_targets || []).map(target => ({
+      screen: screens.find(screen => screen.id === target.screen_id),
+      target,
+      receipt: receiptsByTarget.get(`${item.id}:${target.screen_id}`)
+    })).filter(entry => entry.screen);
+    const shown = targets.filter(({ receipt }) => receipt?.first_shown_at).length;
+    const row = document.createElement('article');
+    row.className = 'screen-broadcast-row broadcast-history-row';
+    const detail = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = item.title;
+    const meta = document.createElement('small');
+    const kind = item.kind === 'image' ? 'Bild' : item.kind === 'video' ? 'Video' : 'Text';
+    const state = item.cancelled_at ? `Avbrutet ${new Date(item.cancelled_at).toLocaleString('sv-SE')}` : 'Avslutat';
+    meta.textContent = `${kind} · ${state} · ${shown}/${targets.length} skärmar rapporterade visning · ${new Date(item.starts_at).toLocaleString('sv-SE')}`;
+    detail.append(title, meta);
+    const delivery = document.createElement('details');
+    delivery.className = 'broadcast-delivery';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Visa historik per skärm';
+    const items = document.createElement('div');
+    items.className = 'broadcast-delivery-items';
+    targets.forEach(({ screen, target, receipt }) => {
+      const status = receipt?.first_shown_at
+        ? `Visad ${new Date(receipt.first_shown_at).toLocaleString('sv-SE')}${receipt.playback_count > 1 ? ` · ${receipt.playback_count} perioder` : ''}`
+        : !screenBroadcastHistoryDeliveryAvailable ? 'Kvittens otillgänglig'
+        : target.superseded_at && new Date(target.superseded_at) <= new Date(item.starts_at) ? 'Ersatt före start'
+        : 'Ingen visningskvittens';
+      const targetRow = document.createElement('div');
+      targetRow.className = 'broadcast-delivery-item';
+      const name = document.createElement('strong');
+      name.textContent = screen.name;
+      const stateLabel = document.createElement('span');
+      stateLabel.textContent = status;
+      targetRow.append(name, stateLabel);
+      items.append(targetRow);
+    });
+    delivery.append(summary, items);
+    detail.append(delivery);
+    row.append(detail);
+    return row;
+  }));
 }
 
 function updateBroadcastAssetOptions() {
