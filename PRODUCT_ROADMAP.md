@@ -7,7 +7,7 @@ See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the capability map, deliv
 ## Current foundation
 
 - Native Android TV player with pairing, heartbeat, offline playback, auto-start, remote sync/restart, live content feeds, multi-zone layouts, schedules, and temporary screen casts.
-- Admin screens for screen inventory, groups, live status, playlists, channels, media, team roles, and audit activity.
+- Admin workspace with categorized navigation and separate views for screens, media, playlists, channels, broadcasts, integrations, playback, organization, team, and activity.
 - Supabase-backed authentication, row-level access policies, storage, and GitHub Pages hosting.
 - Live TV screenshots and health reporting are available when the player is online; a screenshot confirms the app render, not the physical panel or TV power state.
 
@@ -15,7 +15,7 @@ See [SCREENCLOUD_PARITY.md](SCREENCLOUD_PARITY.md) for the capability map, deliv
 
 | Area | Current coverage | Next product milestone |
 | --- | --- | --- |
-| Screens and devices | Pairing/recovery, stable player identity, unique active names, grouped legacy profiles, one-TV selectors and bulk actions, groups, locations, online status, previews, remote restart/sync, device diagnostics, scheduled online/offline history, player publication acknowledgements, and downloadable support bundles | Safely merge or archive legacy duplicate profiles; add guided remote troubleshooting |
+| Screens and devices | Pairing/recovery, stable player identity, unique active names, grouped legacy profiles, one-TV selectors and bulk actions, grouped navigation by work area, groups, locations, online status, previews, remote restart/sync, device diagnostics, scheduled online/offline history, player publication acknowledgements, and downloadable support bundles | Safely merge or archive legacy duplicate profiles; add guided remote troubleshooting |
 | Content | Text, image, video, web links, JSON feeds, reusable library, expiring media, versioned per-screen publishing snapshots, player revision acknowledgements, and editor-to-admin approval | Processing/transcoding, document/PDF support, reusable native app instances |
 | Playlists and channels | Reusable playlists with atomic drag or keyboard ordering, recurring schedules, priority, multi-zone, weekly per-screen channel calendar, inline channel and screen schedule editing, atomic channel playlist reordering, draft preview, version history, restore, queued player sync, delivered revision status, per-screen bulk publishing, and editor approval requests for selected screens | Playlist-level calendar entries and automatic conflict resolution suggestions |
 | Live data and apps | Native Pulse/JSON feed and web dashboard support; reusable Pulse connections with protected credentials; per-screen feed status, HTTP/network errors, last success and source host | Expand connector catalog with OAuth-backed business apps, refreshable credentials, and setup health checks |

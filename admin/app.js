@@ -194,9 +194,12 @@ let activityLoadId = 0;
 const selectedScreenIds = new Set();
 let activeWorkspace = 'screens';
 const workspaceDetails = {
-  screens: ['Skärmar', 'Övervaka anslutning, innehåll och status för dina skärmar.'],
-  content: ['Innehåll', 'Hantera återanvändbara spellistor och innehållsbiblioteket.'],
-  channels: ['Kanaler', 'Planera vad som ska visas, när det ska visas och på vilka skärmar.'],
+  screens: ['Skärmöversikt', 'Övervaka anslutning, innehåll och status för dina skärmar.'],
+  content: ['Mediabibliotek', 'Hantera återanvändbart innehåll och live-data.'],
+  playlists: ['Spellistor', 'Bygg och organisera spellistor för dina skärmar.'],
+  channels: ['Kanaler & schema', 'Planera vad som ska visas, när det ska visas och på vilka skärmar.'],
+  broadcasts: ['Utskick', 'Skapa tillfälliga meddelanden och följ spelarens kvittens.'],
+  organization: ['Grupper & platser', 'Organisera skärmar i grupper och platser.'],
   integrations: ['Integrationer', 'Övervaka live-feeds som rapporteras från anslutna skärmar.'],
   proof: ['Uppspelning', 'Följ rapporterade innehållsbyten per skärm och exportera uppspelningshistorik.'],
   team: ['Team', 'Hantera personer och åtkomst till Signage Studio.'],
@@ -212,8 +215,8 @@ $('#workspaceNavigation').addEventListener('click', event => {
 
 function setWorkspace(workspace) {
   if (!workspaceDetails[workspace]) return;
-  if (workspace === 'team' && currentRole !== 'admin') return;
-  if (workspace === 'activity' && currentRole !== 'admin') return;
+  if (['team', 'activity', 'organization'].includes(workspace) && currentRole !== 'admin') return;
+  if (workspace === 'broadcasts' && !['admin', 'editor'].includes(currentRole)) return;
   clearInterval(activityTimer);
   activityTimer = null;
   clearInterval(integrationTimer);
@@ -240,6 +243,7 @@ function setWorkspace(workspace) {
     loadIntegrationStatus();
     integrationTimer = setInterval(loadIntegrationStatus, 30000);
   }
+  if (workspace === 'broadcasts') renderBroadcastTargets();
 }
 
 setWorkspace('screens');
@@ -950,6 +954,7 @@ async function loadScreens() {
   mediaFolders = mediaFolderData || [];
   mediaLibraryVersions = mediaVersionData || [];
   updateBroadcastAssetOptions();
+  renderBroadcastTargets();
   updateChannelControls();
   updateChannelManagement();
   renderScreenGroups();
@@ -1019,9 +1024,15 @@ function updateRoleVisibility() {
   document.querySelectorAll('.workspace-tab').forEach(button => {
     button.classList.toggle('hidden', (button.dataset.workspace === 'team' && !admin)
       || (button.dataset.workspace === 'activity' && !admin)
+      || (button.dataset.workspace === 'organization' && !admin)
+      || (button.dataset.workspace === 'broadcasts' && !editor)
       || (button.dataset.workspace !== 'screens' && !currentRole));
   });
-  if (!currentRole || (['team', 'activity'].includes(activeWorkspace) && !admin)) setWorkspace('screens');
+  document.querySelectorAll('[data-workspace-nav-group]').forEach(group => {
+    group.classList.toggle('hidden', ![...group.querySelectorAll('.workspace-tab')].some(button => !button.classList.contains('hidden')));
+  });
+  if (!currentRole || (['team', 'activity', 'organization'].includes(activeWorkspace) && !admin)
+    || (activeWorkspace === 'broadcasts' && !editor)) setWorkspace('screens');
 }
 
 function updateChannelControls() {
@@ -2453,6 +2464,82 @@ function updateBroadcastAssetOptions() {
   updateBroadcastTextRequirement();
 }
 
+function updateBroadcastTargetCount() {
+  const list = $('#broadcastTargetList');
+  const count = $('#broadcastTargetCount');
+  if (!list || !count) return;
+  const selected = list.querySelectorAll('input[name="broadcast_screen_id"]:checked').length;
+  count.textContent = `${selected} valda`;
+}
+
+function renderBroadcastTargets() {
+  const list = $('#broadcastTargetList');
+  if (!list) return;
+  const priorSelection = new Set([...list.querySelectorAll('input[name="broadcast_screen_id"]:checked')].map(input => input.value));
+  const hasInitialized = list.dataset.initialized === 'true';
+  const initialSelection = new Set(selectedLogicalScreens().map(screen => screen.id));
+  const logical = logicalScreens();
+  list.replaceChildren();
+  if (!logical.length) {
+    list.innerHTML = '<div class="broadcast-target-empty">Inga skärmar finns ännu.</div>';
+    list.dataset.initialized = 'true';
+    updateBroadcastTargetCount();
+    return;
+  }
+  const groupNames = new Map(screenGroups.map(group => [group.id, group.name]));
+  const locationNames = new Map(locations.map(location => [location.id, location.name]));
+  logical.forEach(screen => {
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.name = 'broadcast_screen_id';
+    checkbox.value = screen.id;
+    checkbox.checked = hasInitialized ? priorSelection.has(screen.id) : initialSelection.has(screen.id);
+    const label = document.createElement('label');
+    label.className = 'broadcast-target-option';
+    label.append(checkbox);
+    const copy = document.createElement('span');
+    copy.className = 'broadcast-target-copy';
+    const name = document.createElement('strong');
+    name.textContent = screen.name || 'Namnlös skärm';
+    const details = document.createElement('small');
+    const metadata = [locationNames.get(screen.location_id), groupNames.get(screen.group_id)].filter(Boolean);
+    metadata.push(screen.is_active && screen.activated_at ? 'Aktiv' : 'Inaktiv');
+    details.textContent = metadata.join(' · ');
+    copy.append(name, details);
+    const state = document.createElement('span');
+    state.className = `broadcast-target-status ${isOnline(screen) ? 'online' : 'offline'}`;
+    state.textContent = isOnline(screen) ? 'Online' : 'Offline';
+    label.append(copy, state);
+    list.append(label);
+  });
+  list.dataset.initialized = 'true';
+  updateBroadcastTargetCount();
+}
+
+$('#screenBroadcastForm').addEventListener('click', event => {
+  const button = event.target.closest('[data-broadcast-target-action]');
+  if (!button) return;
+  const checkboxes = [...$('#broadcastTargetList').querySelectorAll('input[name="broadcast_screen_id"]')];
+  if (button.dataset.broadcastTargetAction === 'all') checkboxes.forEach(input => { input.checked = true; });
+  if (button.dataset.broadcastTargetAction === 'none') checkboxes.forEach(input => { input.checked = false; });
+  if (button.dataset.broadcastTargetAction === 'selected') {
+    const selectedIds = new Set(selectedLogicalScreens().map(screen => screen.id));
+    checkboxes.forEach(input => { input.checked = selectedIds.has(input.value); });
+  }
+  updateBroadcastTargetCount();
+});
+$('#screenBroadcastForm').addEventListener('change', event => {
+  if (event.target.matches('input[name="broadcast_screen_id"]')) updateBroadcastTargetCount();
+});
+
+document.addEventListener('click', event => {
+  if (!event.target.closest('[data-open-broadcast]')) return;
+  renderBroadcastTargets();
+  setWorkspace('broadcasts');
+  $('#screenBroadcastComposer').open = true;
+  $('#screenBroadcastComposer').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
 function updateBroadcastTextRequirement() {
   const form = $('#screenBroadcastForm');
   if (!form) return;
@@ -2469,11 +2556,13 @@ function supportsScheduledBroadcasts(playerVersion) {
 async function sendScreenBroadcast(event) {
   event.preventDefault();
   if (!['admin', 'editor'].includes(currentRole)) return;
-  const selected = selectedLogicalScreens();
-  const active = selected.filter(screen => screen.is_active && screen.activated_at);
-  if (!active.length) return toast('Markera minst en parkopplad, aktiv skärm.', true);
-  if (active.length > 100) return toast('Ett utskick kan gå till högst 100 skärmar åt gången.', true);
   const form = event.currentTarget;
+  const selectedIds = new Set([...form.querySelectorAll('input[name="broadcast_screen_id"]:checked')].map(input => input.value));
+  const selected = logicalScreens().filter(screen => selectedIds.has(screen.id));
+  const active = selected.filter(screen => screen.is_active && screen.activated_at);
+  if (!selected.length) return toast('Välj minst en skärm som mottagare.', true);
+  if (!active.length) return toast('Välj minst en parkopplad, aktiv skärm.', true);
+  if (active.length > 100) return toast('Ett utskick kan gå till högst 100 skärmar åt gången.', true);
   const title = form.elements.title.value.trim();
   const body = form.elements.body.value.trim();
   const assetId = form.elements.asset_id.value || null;
@@ -2508,6 +2597,7 @@ async function sendScreenBroadcast(event) {
     form.elements.duration.value = '10';
     form.elements.duration_seconds.value = '60';
     updateBroadcastTextRequirement();
+    updateBroadcastTargetCount();
     $('#screenBroadcastComposer').open = false;
     toast(scheduled
       ? `Utskicket är planerat till ${startAt.toLocaleString('sv-SE')} på ${active.length} skärmar.`

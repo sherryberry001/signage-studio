@@ -29,6 +29,8 @@ Distribuera Edge Functions `report-screen-preview` och `invite-team-member` med 
 
 När Pages-workflowen är klar finns adminvyn på `https://<github-användare>.github.io/<repo>/`. Logga in med ett inbjudet admin-konto, skapa en skärm och använd den sex tecken långa parkopplingskoden i TV-appen. Koden går bara att använda en gång.
 
+Adminvyn är uppdelad i arbetsytor med en fast meny: Skärmöversikt, Mediabibliotek, Spellistor, Kanaler & schema, Utskick, Integrationer, Uppspelning samt adminytorna Grupper & platser, Team och Aktivitetslogg. Utskick har en separat mottagarlista där TV-apparater kan väljas direkt; äldre profiler för samma TV visas bara en gång.
+
 ## Bygg och installera TV-appen
 
 1. Hämta [Signage Player 1.19.0 APK:n](https://sherryberry001.github.io/signage-studio/signage-player-v1.19.0.apk) från GitHub Pages. APK:n byggs lokalt och följer med repots publicerade `/docs`-filer. Spelaren binder en hashad Android-enhetsidentitet till profilen, så nya parkopplingskoder på samma TV återanvänder den och tomma dubblettprofiler stängs av. Alternativt kör **Actions → Build Android TV player** eller bygg lokalt från `player-android/` med Android SDK 35 och JDK 17.
