@@ -934,7 +934,7 @@ async function refreshScreenStatus() {
 }
 
 function kindLabel(kind) {
-  return ({ text: 'Textmeddelande', video: 'Video', clock: 'Klocka & datum', feed: 'JSON-feed', web: 'Webbsida / live dashboard', sleep: 'Utanför öppettider' })[kind] || kind || '—';
+  return ({ text: 'Textmeddelande', video: 'Video', clock: 'Klocka & datum', feed: 'JSON-feed', web: 'Webbsida / live dashboard', sleep: 'Utanför öppettider', paused: 'Pausad' })[kind] || kind || '—';
 }
 
 function formatCommandStatus(command) {

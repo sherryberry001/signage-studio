@@ -43,6 +43,7 @@ class MainActivity : Activity() {
     private var screenId: String? = null
     private var screenConfig = JSONObject()
     private var outsideOperatingHours = false
+    private var screenPaused = false
     private var slides = JSONArray()
     private var zoneSlides = JSONArray()
     private var index = 0
@@ -79,6 +80,7 @@ class MainActivity : Activity() {
         screenId = prefs.getString("screen_id", null)
         screenConfig = runCatching { JSONObject(prefs.getString("screen_config", "{}") ?: "{}") }.getOrDefault(JSONObject())
         outsideOperatingHours = !isWithinOperatingHours(screenConfig)
+        screenPaused = !screenConfig.optBoolean("is_active", true)
         if (screenId.isNullOrBlank()) showPairing() else startPlayer()
     }
 
@@ -150,7 +152,8 @@ class MainActivity : Activity() {
 
     private fun startPlayer() {
         enterImmersive()
-        if (outsideOperatingHours) showOperatingHoursScreen()
+        if (screenPaused) showPausedScreen()
+        else if (outsideOperatingHours) showOperatingHoursScreen()
         else showMessage("Ansluter till Signage Studio …", "Senast publicerade innehåll visas när det går att synka.")
         syncPlaylist()
         refreshTask?.let(handler::removeCallbacks)
@@ -173,6 +176,10 @@ class MainActivity : Activity() {
         scheduleTask?.let(handler::removeCallbacks)
         scheduleTask = object : Runnable {
             override fun run() {
+                if (screenPaused) {
+                    handler.postDelayed(this, 15_000)
+                    return
+                }
                 val isClosed = !isWithinOperatingHours(screenConfig)
                 if (isClosed != outsideOperatingHours) {
                     outsideOperatingHours = isClosed
@@ -219,10 +226,14 @@ class MainActivity : Activity() {
                 handler.post {
                     val wasClosed = outsideOperatingHours
                     screenConfig = effectiveConfig
+                    val wasPaused = screenPaused
+                    screenPaused = !screenConfig.optBoolean("is_active", true)
                     outsideOperatingHours = !isWithinOperatingHours(screenConfig)
-                    if (outsideOperatingHours) {
-                        if (!wasClosed || changed) showOperatingHoursScreen()
-                    } else if (changed || configChanged || wasClosed || fresh.length() == 0) {
+                    if (screenPaused) {
+                        if (!wasPaused || changed || configChanged) showPausedScreen()
+                    } else if (outsideOperatingHours) {
+                        if (wasPaused || !wasClosed || changed || configChanged) showOperatingHoursScreen()
+                    } else if (changed || configChanged || wasClosed || wasPaused || fresh.length() == 0) {
                         if (changed) index = 0
                         showCurrentSlide()
                     }
@@ -234,8 +245,10 @@ class MainActivity : Activity() {
                 val savedTime = prefs.getString("last_sync", null)
                 lastSync = savedTime?.let { "Offline · senast synkad ${formatTime(it)}" } ?: "Offline · inget innehåll sparat"
                 handler.post {
+                    screenPaused = !screenConfig.optBoolean("is_active", true)
                     outsideOperatingHours = !isWithinOperatingHours(screenConfig)
-                    if (outsideOperatingHours) showOperatingHoursScreen()
+                    if (screenPaused) showPausedScreen()
+                    else if (outsideOperatingHours) showOperatingHoursScreen()
                     else if (slides.length() > 0 || zoneSlides.length() > 0) showCurrentSlide()
                     else showMessage("Ingen anslutning", "När TV:n får nät igen synkas innehållet automatiskt.")
                 }
@@ -308,6 +321,10 @@ class MainActivity : Activity() {
     }
 
     private fun showCurrentSlide() {
+        if (screenPaused) {
+            showPausedScreen()
+            return
+        }
         if (outsideOperatingHours) {
             showOperatingHoursScreen()
             return
@@ -1128,6 +1145,28 @@ class MainActivity : Activity() {
         currentTitle = "Utanför öppettider"
         currentBody = ""
         currentKind = "sleep"
+        currentSourceUrl = null
+        reportHeartbeat(null, currentTitle, currentBody, currentKind, currentSourceUrl)
+    }
+
+    private fun showPausedScreen() {
+        slideGeneration++
+        advanceTask?.let(handler::removeCallbacks)
+        clockTask?.let(handler::removeCallbacks)
+        feedRefreshTask?.let(handler::removeCallbacks)
+        feedRefreshTask = null
+        playerVideo?.stopPlayback()
+        dashboardView?.stopLoading()
+        dashboardView?.destroy()
+        clearSecondaryZone()
+        playerVideo = null
+        dashboardView = null
+        root.removeAllViews()
+        root.setBackgroundColor(Color.BLACK)
+        currentSlide = null
+        currentTitle = "Skärmen är pausad"
+        currentBody = ""
+        currentKind = "paused"
         currentSourceUrl = null
         reportHeartbeat(null, currentTitle, currentBody, currentKind, currentSourceUrl)
     }

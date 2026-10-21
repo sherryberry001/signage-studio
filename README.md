@@ -27,7 +27,7 @@ När Pages-workflowen är klar finns adminvyn på `https://<github-användare>.g
 
 ## Bygg och installera TV-appen
 
-1. Hämta [senaste Signage Player APK:n](https://sherryberry001.github.io/signage-studio/signage-player-v1.8.0.apk) från GitHub Pages. APK:n byggs lokalt och följer med repots publicerade `/docs`-filer. Alternativt kör **Actions → Build Android TV player** eller bygg lokalt från `player-android/` med Android SDK 35 och JDK 25.
+1. Hämta [senaste Signage Player APK:n](https://sherryberry001.github.io/signage-studio/signage-player-v1.9.0.apk) från GitHub Pages. APK:n byggs lokalt och följer med repots publicerade `/docs`-filer. Alternativt kör **Actions → Build Android TV player** eller bygg lokalt från `player-android/` med Android SDK 35 och JDK 17.
 2. På Philips-TV:n behöver appen installeras en gång. Google Play kräver Google-inloggning; om du inte vill logga in kan APK:n sideloadas. Aktivera då utvecklaralternativ och USB-/nätverksfelsökning på TV:n och installera med Android Debug Bridge, eller kopiera APK:n via USB med en filhanterare.
 3. Starta **Signage Player**, skriv parkopplingskoden från adminvyn och låt appen gå i helskärm.
 
