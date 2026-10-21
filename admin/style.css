@@ -33,7 +33,7 @@
 .current-preview img{width:100%;height:100%;object-fit:contain;background:#0e1118}
 .playlist-manage-item[draggable="true"]{cursor:grab;transition:opacity .12s,border-color .12s,transform .12s}.playlist-manage-item[draggable="true"]:active{cursor:grabbing}.playlist-manage-item.dragging{opacity:.42;transform:scale(.99)}.playlist-manage-item.drop-target{border-color:#83a7ff;box-shadow:0 -2px 0 #83a7ff}
 
-.channel-calendar-event.conflict{border-color:#ffb45470;border-left-color:#ffb454;background:#ffb4540d}.channel-calendar-event .channel-conflict-note{color:#ffd08f;font-weight:700}
+.channel-calendar-event.conflict{border-color:#ffb45470;border-left-color:#ffb454;background:#ffb4540d}.channel-calendar-event .channel-conflict-note{color:#ffd08f;font-weight:700}.channel-conflict-detail{display:block;margin-top:5px}.channel-priority-suggestion{margin-left:6px;vertical-align:middle}
 
 /* Persistent workspace navigation: content is grouped by task instead of one long admin page. */
 .dashboard-layout{display:grid;grid-template-columns:218px minmax(0,1fr);gap:24px;align-items:start;margin-top:8px}

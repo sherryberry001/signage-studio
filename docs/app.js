@@ -1257,6 +1257,48 @@ function findScheduleConflicts(entries, dayStart, weekday) {
   return conflicts;
 }
 
+function channelScheduleDefinitionKey(schedule) {
+  return JSON.stringify([
+    schedule.channel_id,
+    Number(schedule.priority),
+    schedule.active_from || null,
+    schedule.active_until || null,
+    [...(schedule.weekdays || [])].map(Number).sort((a, b) => a - b),
+    schedule.daily_start_time || null,
+    schedule.daily_end_time || null
+  ]);
+}
+
+function duplicateLogicalChannelSchedules(schedule) {
+  const screen = screens.find(item => item.id === schedule.screen_id);
+  const profileKey = screen ? screenProfileKey(screen) : schedule.screen_id;
+  const definitionKey = channelScheduleDefinitionKey(schedule);
+  return channelSchedules.filter(item => {
+    const itemScreen = screens.find(candidate => candidate.id === item.screen_id);
+    return (itemScreen ? screenProfileKey(itemScreen) : item.screen_id) === profileKey
+      && channelScheduleDefinitionKey(item) === definitionKey;
+  });
+}
+
+function suggestChannelPriority(schedule) {
+  const screen = screens.find(item => item.id === schedule.screen_id);
+  const profileKey = screen ? screenProfileKey(screen) : schedule.screen_id;
+  const duplicateIds = new Set(duplicateLogicalChannelSchedules(schedule).map(item => item.id));
+  const used = new Set(channelSchedules.filter(item => {
+    const itemScreen = screens.find(candidate => candidate.id === item.screen_id);
+    return (itemScreen ? screenProfileKey(itemScreen) : item.screen_id) === profileKey
+      && !duplicateIds.has(item.id);
+  }).map(item => Number(item.priority)));
+  const current = Number(schedule.priority);
+  for (let priority = current + 1; priority <= 1000; priority++) {
+    if (!used.has(priority)) return priority;
+  }
+  for (let priority = current - 1; priority >= 0; priority--) {
+    if (!used.has(priority)) return priority;
+  }
+  return null;
+}
+
 function renderChannelCalendar() {
   const grid = $('#channelCalendarGrid');
   const range = $('#channelCalendarRange');
@@ -1290,6 +1332,7 @@ function renderChannelCalendar() {
     if (!visibleSchedulesByKey.has(key)) visibleSchedulesByKey.set(key, schedule);
   });
   const visibleSchedules = [...visibleSchedulesByKey.values()];
+  const suggestedConflictPairs = new Set();
   grid.innerHTML = days.map(day => {
     const weekday = ((day.getDay() + 6) % 7) + 1;
     const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate());
@@ -1318,13 +1361,60 @@ function renderChannelCalendar() {
         const priority = Number(schedule.priority);
         const otherPriority = Number(other.priority);
         const outcome = priority < otherPriority ? `prio ${priority} vinner` : priority > otherPriority ? `prio ${otherPriority} vinner` : `samma kanalprio ${priority}; TV:n använder spellistprio och ordning som utslagsregel`;
-        return `Överlappar ${otherChannel?.name || 'annan kanal'} · ${outcome}`;
-      }).join(' · ');
-      return `<article class="channel-calendar-event ${overlaps.length ? 'conflict' : ''}" ${overlaps.length ? 'aria-label="Schemakrock"' : ''}><strong>${esc(channel.name)}</strong><span>${esc(screen.name)}</span><small>${esc(time)}${continuesFromPreviousDay ? ' · fortsättning från föregående dag' : ''} · prio ${Number(schedule.priority)}</small>${schedule.active_from || schedule.active_until ? `<small>${schedule.active_from ? calendarDateLabel(new Date(schedule.active_from)) : 'Start utan gräns'} – ${schedule.active_until ? calendarDateLabel(new Date(schedule.active_until)) : 'utan slut'}</small>` : ''}${conflictNote ? `<small class="channel-conflict-note">⚠ ${esc(conflictNote)}</small>` : ''}</article>`;
+        const pairKey = [schedule.id, other.id].sort().join(':');
+        let suggestion = '';
+        if (priority === otherPriority && ['admin', 'editor'].includes(currentRole) && !suggestedConflictPairs.has(pairKey)) {
+          suggestedConflictPairs.add(pairKey);
+          const suggestedPriority = suggestChannelPriority(schedule);
+          if (suggestedPriority !== null) {
+            suggestion = ` <button class="button ghost small channel-priority-suggestion" type="button" data-schedule-id="${esc(schedule.id)}" data-suggested-priority="${suggestedPriority}">Sätt prio ${suggestedPriority}</button>`;
+          }
+        }
+        return `<small class="channel-conflict-detail">⚠ Överlappar ${esc(otherChannel?.name || 'annan kanal')} · ${esc(outcome)}${suggestion}</small>`;
+      }).join('');
+      return `<article class="channel-calendar-event ${overlaps.length ? 'conflict' : ''}" ${overlaps.length ? 'aria-label="Schemakrock"' : ''}><strong>${esc(channel.name)}</strong><span>${esc(screen.name)}</span><small>${esc(time)}${continuesFromPreviousDay ? ' · fortsättning från föregående dag' : ''} · prio ${Number(schedule.priority)}</small>${schedule.active_from || schedule.active_until ? `<small>${schedule.active_from ? calendarDateLabel(new Date(schedule.active_from)) : 'Start utan gräns'} – ${schedule.active_until ? calendarDateLabel(new Date(schedule.active_until)) : 'utan slut'}</small>` : ''}${conflictNote ? `<div class="channel-conflict-note">${conflictNote}</div>` : ''}</article>`;
     }).join('');
     return `<section class="channel-calendar-day ${day.toDateString() === new Date().toDateString() ? 'today' : ''}"><header><strong>${calendarDateLabel(day, { weekday: 'short' })}</strong><span>${calendarDateLabel(day, { day: 'numeric', month: 'short' })}</span></header><div class="channel-calendar-events">${items || '<span class="channel-calendar-empty">Inget kanalschema</span>'}</div></section>`;
   }).join('');
 }
+
+$('#channelCalendarGrid').addEventListener('click', async event => {
+  const button = event.target.closest('[data-suggested-priority]');
+  if (!button || button.disabled || !['admin', 'editor'].includes(currentRole)) return;
+  const schedule = channelSchedules.find(item => item.id === button.dataset.scheduleId);
+  const priority = Number(button.dataset.suggestedPriority);
+  if (!schedule || !Number.isInteger(priority) || priority < 0 || priority > 1000) return;
+  const duplicates = duplicateLogicalChannelSchedules(schedule);
+  const duplicateIds = new Set(duplicates.map(item => item.id));
+  const screen = screens.find(item => item.id === schedule.screen_id);
+  const profileKey = screen ? screenProfileKey(screen) : schedule.screen_id;
+  const priorityTaken = channelSchedules.some(item => {
+    if (duplicateIds.has(item.id) || Number(item.priority) !== priority) return false;
+    const itemScreen = screens.find(candidate => candidate.id === item.screen_id);
+    return (itemScreen ? screenProfileKey(itemScreen) : item.screen_id) === profileKey;
+  });
+  if (priorityTaken) {
+    toast('Schemat ändrades sedan kalendern laddades. Uppdatera och välj en ny prioritetssuggestion.', true);
+    return loadScreens();
+  }
+  button.disabled = true;
+  const expectedIds = duplicates.map(item => item.id);
+  const { data: updatedSchedules, error } = await supabase.from('screen_channel_schedules')
+    .update({ priority })
+    .in('id', expectedIds)
+    .select('id');
+  if (error) {
+    button.disabled = false;
+    return toast(error.message, true);
+  }
+  if ((updatedSchedules || []).length !== expectedIds.length) {
+    button.disabled = false;
+    toast('Alla matchande skärmprofiler kunde inte uppdateras. Ladda om kalendern och kontrollera behörighet.', true);
+    return loadScreens();
+  }
+  toast(`Prioritet ${priority} sparades som utkast${duplicates.length > 1 ? ` för ${duplicates.length} äldre skärmprofiler` : ''}. Publicera skärmen för att skicka schemat till TV:n.`);
+  await loadScreens();
+});
 
 function renderPlaylistLibrary() {
   const container = $('#playlistManagementList');
