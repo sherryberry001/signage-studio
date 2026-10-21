@@ -737,6 +737,7 @@ $('#mediaFolderFilter').addEventListener('change', renderMediaLibrary);
 $('#activitySearch').addEventListener('input', renderActivityLog);
 $('#activityFilter').addEventListener('change', renderActivityLog);
 $('#refreshActivity').addEventListener('click', loadActivityLog);
+$('#exportActivity').addEventListener('click', exportActivityLog);
 $('#refreshPlayback').addEventListener('click', loadPlaybackEvents);
 $('#playbackFrom').value = localDateInput(new Date(Date.now() - 6 * 86400000));
 $('#playbackTo').value = localDateInput(new Date());
@@ -1398,12 +1399,19 @@ $('#channelCalendarGrid').addEventListener('click', async event => {
     return loadScreens();
   }
   button.disabled = true;
-  const { error } = await supabase.from('screen_channel_schedules')
+  const expectedIds = duplicates.map(item => item.id);
+  const { data: updatedSchedules, error } = await supabase.from('screen_channel_schedules')
     .update({ priority })
-    .in('id', duplicates.map(item => item.id));
+    .in('id', expectedIds)
+    .select('id');
   if (error) {
     button.disabled = false;
     return toast(error.message, true);
+  }
+  if ((updatedSchedules || []).length !== expectedIds.length) {
+    button.disabled = false;
+    toast('Alla matchande skärmprofiler kunde inte uppdateras. Ladda om kalendern och kontrollera behörighet.', true);
+    return loadScreens();
   }
   toast(`Prioritet ${priority} sparades som utkast${duplicates.length > 1 ? ` för ${duplicates.length} äldre skärmprofiler` : ''}. Publicera skärmen för att skicka schemat till TV:n.`);
   await loadScreens();
@@ -1906,13 +1914,17 @@ function activityMatchesGroup(item, group) {
   return item.entity_type === group;
 }
 
+function filteredActivityRows(items, group, query) {
+  return items.filter(item => activityMatchesGroup(item, group)
+    && (!query || `${item.actor_email} ${item.entity_label} ${item.entity_type} ${(item.changed_fields || []).join(' ')}`.toLocaleLowerCase('sv-SE').includes(query)));
+}
+
 function renderActivityLog() {
   const list = $('#activityList');
   if (!list) return;
   const query = ($('#activitySearch')?.value || '').trim().toLocaleLowerCase('sv-SE');
   const group = $('#activityFilter')?.value || 'all';
-  const rows = activityLog.filter(item => activityMatchesGroup(item, group)
-    && (!query || `${item.actor_email} ${item.entity_label} ${item.entity_type} ${(item.changed_fields || []).join(' ')}`.toLocaleLowerCase('sv-SE').includes(query)));
+  const rows = filteredActivityRows(activityLog, group, query);
   if (!activityLog.length) {
     list.innerHTML = '<div class="activity-empty">Inga registrerade händelser ännu. Nya ändringar visas här automatiskt.</div>';
     return;
@@ -1929,6 +1941,75 @@ function renderActivityLog() {
     const detail = fields.length ? fields.join(', ') : item.action === 'INSERT' ? 'Ny post' : item.action === 'DELETE' ? 'Post borttagen' : '—';
     return `<div class="activity-row" role="row"><time datetime="${esc(item.created_at)}">${esc(date(item.created_at))}</time><span>${esc(item.actor_email || 'System/automatiserat')}</span><span><strong>${esc(entity)} ${esc(action)}</strong><small>${esc(item.entity_label)}</small></span><span>${esc(detail)}</span></div>`;
   }).join('')}</div>`;
+}
+
+async function exportActivityLog() {
+  if (currentRole !== 'admin') return;
+  const userId = currentUser?.id;
+  if (!userId) return;
+  const button = $('#exportActivity');
+  const originalLabel = button.textContent;
+  const group = $('#activityFilter')?.value || 'all';
+  const query = ($('#activitySearch')?.value || '').trim().toLocaleLowerCase('sv-SE');
+  const rows = [];
+  const seenIds = new Set();
+  let cursor = null;
+  button.disabled = true;
+  button.textContent = 'Hämtar logg …';
+  try {
+    while (true) {
+      let request = supabase.from('activity_log')
+        .select('id,actor_email,action,entity_type,entity_label,changed_fields,created_at')
+        .order('created_at', { ascending: false }).order('id', { ascending: false }).limit(500);
+      if (cursor) {
+        request = request.or(`created_at.lt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.lt.${cursor.id})`);
+      }
+      const { data, error } = await request;
+      if (currentRole !== 'admin' || currentUser?.id !== userId) return;
+      if (error) return toast(`Aktivitetsloggen kunde inte exporteras: ${error.message}`, true);
+      const page = data || [];
+      const fresh = page.filter(item => !seenIds.has(item.id));
+      fresh.forEach(item => {
+        seenIds.add(item.id);
+        rows.push(item);
+      });
+      if (page.length < 500 || fresh.length === 0) break;
+      cursor = page[page.length - 1];
+    }
+
+    const matchingRows = filteredActivityRows(rows, group, query);
+    if (currentRole !== 'admin' || currentUser?.id !== userId) return;
+    if (!matchingRows.length) return toast('Inga aktivitetsrader matchar filtret.');
+    const csvCell = value => {
+      let text = String(value ?? '');
+      if (/^[\s]*[=+@-]/.test(text)) text = `'${text}`;
+      return `"${text.replaceAll('"', '""')}"`;
+    };
+    const csvRows = [
+      ['Tid (UTC)', 'Person', 'Entitet', 'Post', 'Åtgärd', 'Ändrade fält'],
+      ...matchingRows.map(item => [
+        item.created_at,
+        item.actor_email || 'System/automatiserat',
+        activityEntityLabels[item.entity_type] || item.entity_type,
+        item.entity_label,
+        activityActionLabels[item.action] || item.action,
+        (item.changed_fields || []).map(field => activityFieldLabels[field] || field.replaceAll('_', ' ')).join(', ')
+      ])
+    ].map(row => row.map(csvCell).join(',')).join('\r\n');
+    const blob = new Blob([`\ufeff${csvRows}\r\n`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `signage-studio-activity-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast(`${matchingRows.length} matchande händelser exporterades. Skärmens innehållsvärden ingår inte i loggen.`);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
 }
 
 async function loadActivityLog() {

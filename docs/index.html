@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#10131b" />
     <title>Signage Studio</title>
-    <link rel="stylesheet" href="./style.css?v=20261203-channel-priority-v1" />
-    <script type="module" src="./app.js?v=20261203-channel-priority-v1"></script>
+    <link rel="stylesheet" href="./style.css?v=20261203-activity-export-v1" />
+    <script type="module" src="./app.js?v=20261203-activity-export-v1"></script>
   </head>
   <body>
     <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -124,7 +124,7 @@
           <div id="teamList" class="team-list"></div>
         </section>
         <section id="activityPanel" class="activity-panel hidden" data-workspace-panel="activity">
-          <div class="activity-heading"><div><strong>Organisationsaktivitet</strong><span>Ändringar i skärmar, innehåll, scheman, team och fjärrkommandon. Värden från innehållet loggas inte.</span></div><button id="refreshActivity" class="button ghost small" type="button">↻ Uppdatera</button></div>
+          <div class="activity-heading"><div><strong>Organisationsaktivitet</strong><span>Ändringar i skärmar, innehåll, scheman, team och fjärrkommandon. Värden från innehållet loggas inte. Exporten innehåller alla matchande händelser.</span></div><div class="activity-actions"><button id="exportActivity" class="button ghost small" type="button">Exportera CSV</button><button id="refreshActivity" class="button ghost small" type="button">↻ Uppdatera</button></div></div>
           <div class="activity-tools"><input id="activitySearch" type="search" placeholder="Sök person eller post…" aria-label="Sök aktivitet" /><select id="activityFilter" aria-label="Filtrera aktivitet"><option value="all">Alla händelser</option><option value="screens">Skärmar</option><option value="slides">Innehåll</option><option value="playlists">Spellistor</option><option value="channels">Kanaler & scheman</option><option value="team">Team & åtkomst</option><option value="screen_commands">Spelarkommandon</option></select></div>
           <div id="activityList" class="activity-list" aria-live="polite"></div>
         </section>
